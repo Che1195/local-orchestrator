@@ -2,7 +2,7 @@
 
 Issue: https://linear.app/chedev/issue/CHE-1170/claude-orchestrates-local-models-for-real-coding-work
 
-Status: draft rev 2 for Che's review, November 21, 2026. Revised after spec review round 1 (gpt-6.1-sol and gpt-6.1-terra, high). Nothing built yet.
+Status: draft rev 3 for Che's review, November 21, 2026. Revised after spec review rounds 1 and 2 (gpt-6.1-sol and gpt-6.1-terra, high). Nothing built yet.
 
 ## 1. Goal
 
@@ -34,8 +34,8 @@ Open for Che (on the review page): how this shares the model server with CHE-116
 - **Local pass:** an attempt whose protected checks pass and whose diff Claude accepts, before any escalation.
 - **Correction:** Claude's feedback after a failed check or rejected diff. It describes the problem and the failing output; it never contains replacement implementation code.
 - **Escalation:** after the third failed attempt, Claude writes the piece itself.
-- **Infrastructure failure:** an attempt that failed because of the harness, sandbox, server or timeout plumbing, not the model's code. Recorded separately; never counted as a model failure or pass.
-- **Protected files:** the acceptance tests, check commands, package and lock files, and tool configuration for a task. The worker may not change them.
+- **Infrastructure failure:** an attempt that failed with evidence of a harness, sandbox or server fault: a server error response, a sandbox setup error, or a harness crash. Without that evidence, a failed or timed-out attempt is a model failure. An infrastructure failure is re-run, at most twice per task; after that the task is recorded as blocked and phase 2 reports it.
+- **Writable paths:** the files and folders the task file says the worker may change (for example `src/game/`). Everything else, including tests, test helpers, check commands, package and lock files, dependencies and tool configuration, is protected.
 - **Baseline:** the same task, from the same base commit and protected tests, done by Claude alone.
 
 ## 5. Model server
@@ -48,7 +48,7 @@ LM Studio (installed; runs llama.cpp and MLX; API on port 1234; documents Claude
 
 A git worktree is not a security boundary, so the worker runs inside an OS-level sandbox (macOS Seatbelt, through the worker program's own sandbox mode):
 
-- Writes: only the task's worktree, minus protected files.
+- Writes: only the task's writable paths.
 - Reads: the worktree and the worker program's own install. No other repos, no `~/.ssh`, no keychains, no `.env` files.
 - Network: only the local model endpoint. No other local ports, no internet.
 - Environment: a clean home and config directory created per task; scrubbed environment variables; no inherited hooks, MCP servers, plugins or credentials.
@@ -58,21 +58,27 @@ Phase 1 proves the boundary with harmless canary checks: the worker is told to r
 
 ### 6.2 Protected checks
 
+The worker's code is untrusted input, so checks never run in the worker's worktree.
+
 - Claude writes the acceptance tests before dispatch and commits them to the task's base commit.
-- A negative control runs first: the acceptance tests must fail on the base commit. A test that already passes doesn't count.
-- After each attempt, the script verifies the hashes of every protected file and rejects any diff that touches one. Changed protected files fail the attempt.
-- Checks run inside the same sandbox, with no credentials and no network. Skipped tests, zero tests run, or missing check output fail the attempt.
-- Checks that need a browser, a service or the network are host checks; Claude runs them after the sandboxed checks pass, on the host's ports, never on Che's running dev server. A required check that can't run is recorded as blocked, not passed.
+- After an attempt, the script rejects any diff outside the writable paths. Then it builds a fresh check checkout: the base commit, dependencies installed from the lockfile by the harness, and only the worker's diff to the writable paths applied. Checks run there. Nothing the worker changed in its own worktree outside the writable paths, `node_modules` included, can reach the checks.
+- Checks run inside a sandbox with the same limits as the worker (§6.1). Skipped tests, zero tests run, or missing check output fail the attempt. The harness reads pass and fail from the test runner's machine-readable report and its exit code, never from printed text.
+- Checks that need a browser or a local service run in the same kind of sandbox, with only the ports they need opened, disposable test data, and never Che's running dev server. If that boundary can't be set up, the check is recorded as blocked, not passed.
+- Negative controls are per task type, and each must fail before the worker starts:
+  - New behavior or bug fix: the acceptance tests fail on the base commit.
+  - Refactor: the behavior tests pass on the base commit and must still pass; a separate structural check (for example "module X no longer imports Y") fails on the base commit.
+  - Writing tests: the worker's tests are graded by mutants: they must pass on the real code and fail on at least 4 of 5 frozen faulty versions of it. The control is that no tests catch no mutants.
+- Phase 1 calibration includes a tamper case: a worker told to make a failing test pass by editing a test helper or a dependency must be caught.
 
 ### 6.3 `local-worker` script
 
 Bun + TypeScript. Input: repo, base commit, task file, model settings, attempt budget. Steps:
 
 1. Create a worktree at the base commit. Refuse a repo with uncommitted changes in the files the task touches.
-2. Prepare dependencies on the host from the lockfile before the worker starts (the only step with network). Copy no `.env` or secrets.
+2. Prepare dependencies on the host from the lockfile before the worker starts (the only step with network, limited to 10 minutes). Copy no `.env` or secrets.
 3. Start the worker in its own process group, inside the sandbox, with the task.
-4. At the attempt budget (default 20 minutes), stop the process group and cancel its model request without stopping the shared server. A timeout is an infrastructure failure unless the model was still producing output, which is a model failure; the record says which.
-5. Run the protected checks (§6.2).
+4. Deadlines: 20 minutes for the worker, then 10 minutes for all checks, so 30 minutes per attempt end to end. At a deadline the script stops every process group it started (worker, checks, test services) and cancels the model request without stopping the shared server.
+5. Run the checks (§6.2).
 6. Return JSON: status, the full diff including untracked files, check output, elapsed time, local tokens.
 7. Append one record when the attempt starts and one when it ends to an append-only ledger, so a crash leaves a visible incomplete attempt.
 
@@ -91,7 +97,10 @@ The worker never grades its own work.
 - Local tokens come from the worker's server responses.
 - Missing numbers are recorded as unknown, never zero. Setup work shared across tasks is reported separately.
 - Tokens are a proxy for Claude usage-limit burn, not a measurement of it.
-- Baseline (open decision): suggested is a real Claude-only run of each Card Table task from the same base commit and protected tests, in a separate worktree, discarded afterwards. The alternative is an estimate, which makes every savings figure hypothetical.
+- Shared preparation, meaning the task file and protected tests, is done once and used by both the hybrid and the baseline. Its usage is reported on its own line and left out of the comparison.
+- The comparison covers everything after dispatch: for the hybrid, reviews, corrections and escalation code; for the baseline, Claude's whole implementation.
+- One number decides the comparison, cost-weighted tokens: input + 1.25 × cache writes + 0.1 × cache reads + 5 × output, the ratios of Opus 5.5's API prices. The raw categories are reported too.
+- Baseline (open decision): suggested is a real Claude-only run of each Card Table task from the same base commit, task file and protected tests, in a separate worktree, discarded afterwards. The alternative is an estimate, which makes every savings figure hypothetical.
 - Code share is descriptive only: lines of production code in the accepted diff written by the worker, excluding tests, generated files and formatting. Code Claude wrote during escalation counts as Claude's.
 
 ### 6.6 Sharing the model server with CHE-1166
@@ -109,7 +118,7 @@ A skill in `ches-skills` via `new-skill`, plus the script in this repo, only aft
 ## 7. Phases
 
 1. **Plumbing and calibration.** Build `local-worker`. Pin versions. Calibrate the whole loop on one tiny task with headless Claude Code under the sandbox: read, edit, protected checks, one correction, completion, plus the canary checks (§6.1) and a cancellation test. If it fails, run the same calibration on Codex CLI. If neither qualifies, stop and report.
-2. **Model test.** Freeze before running: the candidate list with exact files and settings, 5 tasks with base commits and protected tests, the task prompts, and the correction rules. Tasks: a pure function, a bug fix, a React component, a refactor, and adding tests to existing code (graded by Claude's protected tests of the same code, not the worker's own tests). Candidates: the installed coding-capable models (Inkling 2 Mini Q4_K_M, Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 E4B), each at one frozen setting. Every model gets the same 5 tasks; every attempt, prompt, correction and diff is saved.
+2. **Model test.** Freeze before running: the candidate list with exact files and settings, 5 tasks with base commits and protected tests, the task prompts, and the correction rules. Tasks: a pure function, a bug fix, a React component, a refactor, and adding tests to existing code (graded by frozen mutants, §6.2). Candidates: the installed coding-capable models (Inkling 2 Mini Q4_K_M, Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 E4B), each at one frozen setting. Every model gets the same 5 tasks; every attempt, prompt, correction and diff is saved.
 3. **Card Table trial.** 1–2 real Card Table issues chosen with Che, each run with the best model and, if Che picks the real baseline, by Claude alone.
 4. **Package** (§6.7), if phase 3 meets the bar.
 
@@ -117,14 +126,16 @@ Estimates (not limits): phase 1 about half a day; phase 2 about 3–5 hours of m
 
 ## 8. Stop rule after phase 2
 
-A model qualifies for phase 3 only if it gets a local pass on at least 3 of the 5 tasks, including both the bug fix and the React component, with infrastructure failures re-run, not counted. If no model qualifies, stop after phase 2 and report.
+A model qualifies for phase 3 only if it gets a local pass on at least 3 of the 5 tasks, including both the bug fix and the React component. A blocked task counts as not passed. If no model qualifies, stop after phase 2 and report.
+
+If several qualify, the best model has the most local passes; ties go to fewer total corrections, then to the shorter median attempt time.
 
 ## 9. Acceptance criteria
 
 - Phase 1: the calibration passes end to end, every canary is blocked, and a timed-out attempt leaves no process or model request running. `local-worker` passes typecheck and lint.
 - Phase 2: results saved for every model and attempt, failures included, with the qualify decision per §8.
 - Phase 3: at least one real Card Table issue merged with all Card Table checks passing and Claude's review accepted; every escalation and Claude rewrite recorded.
-- Packaging bar (open decision): suggested is hybrid Claude tokens at most 60% of the real baseline's, at an equal check and review result. With an estimated baseline, the result is reported as inconclusive, and packaging needs Che's call.
+- Packaging bar (open decision): suggested is the hybrid's cost-weighted Claude tokens after dispatch (§6.5) at most 60% of the real baseline's, with both passing all checks and Claude's review. With an estimated baseline, the result is reported as inconclusive, and packaging needs Che's call.
 
 ## 10. Out of scope (v1)
 
