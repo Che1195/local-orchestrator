@@ -123,8 +123,9 @@ The worker never grades its own work.
 Both projects use the same LM Studio server and memory. Model requests, loads and unloads by this project can distort CHE-1166's scored runs.
 
 - Chosen by Che: this project sends no model requests and loads or unloads no models until CHE-1166's scored Snake run is finished and Che says so in chat.
+- Lifted: Che said so in chat on November 21 (§3).
 - Not chosen: per-session handoffs.
-- Either way, this project never changes LM Studio's global settings, and it releases the server with no model requests in flight.
+- Always: this project never changes LM Studio's global settings, and it releases the server with no model requests in flight.
 
 ### 6.7 Packaging
 
@@ -185,11 +186,12 @@ Added by Che on November 21, after approval. CHE-1166 already built Snake three 
 - At most 3 implementation attempts per arm, with CHE-1166's rule: an attempt succeeds only if the call ended normally (exit 0, not timed out) and left a non-empty file. Otherwise the next attempt gets CHE-1166's "finish the unchanged task" feedback with the exit and stop reason, and keeps the existing file. In the Claude-only and Inkling-only arms, the first successful attempt ends the arm. In the hybrid arm, Claude reviews after each successful attempt. If all 3 attempts fail, the arm's outcome is failed, and its last non-empty file, if any, is still shown to Che like any other game; that it came from a failed arm is revealed only after he submits his ratings.
 - No time limits; elapsed time is measured, not cut off.
 - Inkling runs inside the worker sandbox (§6.1). The Claude-only session runs with only file read, write and edit tools: no shell, no MCP servers, no settings from Che's own setup.
-- Arms run one at a time in a random order, after the model-server gate (§6.6).
+- Arms run one at a time in a random order. A scope violation (any change besides `src/snake.html`) ends that arm as failed, as in CHE-1166.
+- Every Claude session in this phase is sandboxed so it can't read the other arms' workspaces, the results or the label mapping.
 
 ### 12.3 Che's review
 
-- Claude's three games are copied to `~/projects/local-ai-output/<run id>/` with random labels A to C and an index page, as CHE-1166 did. Nothing is published remotely.
+- Claude's three games are copied to `~/projects/local-ai-output/<run id>/` with random labels A to C and an index page, as CHE-1166 did. The games are never published remotely; only the rating page (questions and labels, no games) is a private claude.ai page.
 - Che plays them blind and rates each on a review page: works fully, partly or not at all; a score from 1 to 5; and notes. Before he submits, nothing he can see shows timings, attempts, usage, outcomes or review notes: only labels and game links. A label with no file shows "no playable game"; it is ranked last, below every playable game.
 - Then Che ranks all six Snakes from best to worst, GPT's three included. GPT's labels are already known to him, so only Claude's three are blind.
 - Claude takes no part in judging game quality.

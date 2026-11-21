@@ -2,7 +2,7 @@
 
 Spec: SPEC.md rev 6 (rev 5 approved by Che on November 21, 2026; rev 6 adds the Snake evaluation and awaits his re-approval). The spec wins where they differ.
 
-Status: draft rev 4, revised after plan review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and Che's Snake request. Nothing built yet.
+Status: draft rev 5, revised after plan review rounds 1 to 3 and the closing audit (Sol, Terra, Gemini 4 Neon high); the review cap is reached, so rev 5's fixes were not re-reviewed. Earlier: (gpt-6.1-sol and gpt-6.1-terra, high) and Che's Snake request. Nothing built yet.
 
 ## Ground rules
 
@@ -52,22 +52,22 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - `src/workspace.ts`:
   - Refuse when the repo has uncommitted changes in files the task touches.
   - **Dependencies, once per task:** a throwaway clone at the base commit in a temp folder, `bun install --frozen-lockfile --ignore-scripts` there (10-minute limit), then verify that no symlink in `node_modules` points outside the dependency folder or at the repo. Save the folder as the clean dependency copy.
-  - **Attempt worktree:** a fresh worktree at the base commit; for a correction, apply the previous attempt's validated diff.
+  - **Attempt worktree:** a fresh worktree at the base commit plus a copy-on-write clone of the clean dependency copy (`cp -c`) as its `node_modules`, which the Worker profile makes read-only; for a correction, apply the previous attempt's validated diff.
   - **Capture:** list every change with `git status --porcelain=v2 --untracked-files=all --ignored` (tracked, staged, untracked and ignored) and save a tar of every changed file as evidence. The replayable patch is made by `git add -A -f -- <writable paths>` in the tool-owned worktree, then `git diff --cached --binary <base commit>`, so new, staged and ignored files in writable paths are all in it.
-  - **Validate:** every changed path inside `writablePaths`; no symlinks (mode `120000`); no protected file touched. Ignored files outside the writable paths are evidence of an attempted escape and fail the attempt.
+  - **Validate:** every changed path inside `writablePaths`; no symlinks (mode `120000`); no protected file touched. The harness-placed `node_modules` is left out of capture; any other ignored file outside the writable paths is evidence of an attempted escape and fails the attempt. Checks never use the attempt's `node_modules` (they get a fresh clone), so a write to it that slipped past the sandbox still can't reach them.
   - **Check checkout:** a new worktree at the base commit, a copy-on-write clone of the clean dependency copy (`cp -c`), then the validated diff.
   - **Cleanup:** after evidence is saved, `git reset --hard <base commit> && git clean -fdx` inside tool-owned worktrees (resets both the index and the files), then `git worktree remove` (never `--force`). Worktrees this tool didn't create are never touched.
 - Tests on a throwaway fixture repo, including Card Table's layout copied as a fixture: path escape rejected; symlink rejected; untracked and ignored files captured; a new file in a writable path reaches both the correction worktree and the check checkout with exact contents; a tampered `node_modules` file in the worker worktree doesn't reach the check checkout; cleanup leaves no worktree behind after staged modifications, staged additions and staged deletions.
 
 ### T6 · Process supervisor and cancellation (~1 h)
-- `src/supervise.ts`: start a command in a new process group and record every descendant's pid as it appears (polling `ps -o pid,pgid,ppid`); at the deadline send TERM, then KILL after 5 s, to the group and to any recorded descendant that moved to another group. Report whether output was still arriving at the deadline.
+- `src/supervise.ts`: give every attempt a unique token in an environment variable that all descendants inherit (it survives new process groups, new sessions and reparenting). Start the command in a new process group. At the deadline, send TERM, then KILL after 5 s, to the group and to every process of this user whose environment carries the token (read with `ps eww`), checking the token again right before each signal so a reused pid is never hit. Afterwards, scan again: any process still carrying the token makes the attempt `blocked` and stops the run. Report whether output was still arriving at the deadline.
 - Deadlines (spec §6.3): 20 minutes for the worker; 10 minutes for all check runs of an attempt together, mutant runs included. Snake (`artifact`) tasks have no deadline (spec §12.2).
 - Cancellation evidence: the worker's HTTP connection closing is the cancel signal. Proof that the server stopped generating comes from the server: the fake server's disconnect log now, and LM Studio's request log at verbosity 3 (`lms log stream`) [gate], which must show the request ending within 10 s of the kill. No evidence means the calibration step is `blocked`.
-- Tests: a child that spawns grandchildren in a new group is fully killed; a hung child is killed at the deadline; the fake server records the disconnect.
+- Tests: a child that spawns grandchildren in a new group is fully killed; a child that starts a new session, spawns a grandchild and exits at once (so it is reparented) is still found and killed; a hung child is killed at the deadline; the fake server records the disconnect.
 
 ### T7 · Check runner (~2 h)
 - **Sentinel placement:** the sentinel test file is never committed to the target repo. The harness copies it into each check checkout from outside the repo just before a run, so the repo's own `bun test` never sees it.
-- **Test manifest:** during task preparation (trusted, before dispatch), run the protected tests on Claude's reference solution with the JUnit reporter and save every test's identity (file path + full `describe > test` name) to `testManifest`, outside the repo. Supported forms: `test`/`it` inside `describe`, no tests generated at runtime from data. The grader never discovers tests from candidate code.
+- **Test manifest:** during task preparation (trusted, before dispatch), Claude commits the protected tests plus minimal stubs (empty exports that throw "not implemented") so every protected test imports and runs on the base commit, where the new ones fail. That base run, with the JUnit reporter, gives every test's identity (file path + full `describe > test` name, including each case of `test.each` and `describe.each`, whose data sits in protected files) and doubles as the negative control. The identities are saved to `testManifest`, outside the repo. No reference solution is needed; reference solutions exist only for the phase 2 benchmark (T16). The grader never discovers tests from candidate code. For Card Table, the manifest covers its whole existing suite plus the new protected tests, so its `test.each` cases are included.
 - `src/checks.ts` runs the task's checks in the check checkout under the Check profile and grades by run kind:
   - **Acceptance run** (behavior, bugfix, refactor): clean = every manifest test passed, the sentinel (in its own protected file) failed, nothing else failed or skipped, no suite error, exit code is bun's normal test-failure code (not 0, not a signal). Refactor also needs its structural check to pass.
   - **Tests task, real code:** at least one worker test runs, every worker test passes, no worker test is skipped or marked todo, the sentinel fails, no suite error, and the exit code is bun's normal test-failure code.
@@ -79,10 +79,11 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 
 ### T8 · Claude Code worker adapter (~1.5 h)
 - `src/workers/claude-code.ts` builds the headless command from the run configuration:
-  `claude -p --model <local model id> --output-format stream-json --verbose --strict-mcp-config --setting-sources "" --permission-mode bypassPermissions --tools <list>`
+  `claude -p --model <local model id> --effort <reasoning effort> --output-format stream-json --verbose --strict-mcp-config --setting-sources "" --permission-mode bypassPermissions --tools <list>`
   with `ANTHROPIC_BASE_URL`, a dummy `ANTHROPIC_AUTH_TOKEN`, and the scrubbed environment, inside the Worker profile. `--tools` sets which tools exist at all (`--allowedTools` only pre-approves, so it is not used). Code tasks: `Read,Edit,Write,Glob,Grep,Bash`. `artifact` tasks: `Read,Edit,Write` only. Permissions are bypassed inside the worker program because Seatbelt is the boundary.
 - A fake-server test asks the artifact worker to run a shell command and to fetch a URL; both tools must be absent from the session's tool list. The Codex fallback (T11) gets the same test.
 - Each flag is checked against `claude --help` (2.1.329) while building; differences are recorded here.
+- Reasoning effort: the fake server records which request field carries `--effort` (T10 checks it). On LM Studio, T10 confirms from its request log that the setting arrives and that the model produces reasoning at high effort. If headless Claude Code can't deliver it, that counts as a T10 failure and T11 (Codex CLI, which CHE-1166 used to send effort) is built.
 - Parse the stream for completion, errors and local token counts. Prompt = task instructions + correction text (if any) + the boundary rules.
 - Tests against the fake server: scripted read → edit → finish; scripted server error → `infra-fail`; scripted hang → deadline → `model-fail`.
 
@@ -90,6 +91,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - `src/cli.ts`:
   - `run --config <file> --task <file> --attempt <n> [--correction <file> --previous-diff <file>]`
   - `negative-control --task <file>`
+  - `check --task <file> --commit <ref>`: the full sandboxed check (T5 check checkout, T7 grader, sentinel, manifest) on any commit, with no worker. Used for escalation code, the baseline (T20) and the merged commit (T21).
   - `review` and `escalate` (T3)
   - Prints one JSON result per call and writes ledger records.
 - Done when: an end-to-end run on the fake server passes on a fixture task: scripted first-attempt failure, Claude's rejection recorded, correction, `checks-passed`, acceptance recorded, `local-pass` derived.
@@ -110,32 +112,34 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 ### T12 · Usage accounting (~1.5 h)
 - First capture real transcripts from Claude Code 2.1.329 (a short headless session, and one interrupted mid-response) as fixtures, and record the schema found.
 - `src/usage.ts`: read a session transcript by session id; group assistant records by API message id and count each response once, using the final record's usage (streamed placeholder counts are ignored); include failed and interrupted calls when their usage is recorded. Cost-weighted total = input + 1.25 × cache writes + 0.1 × cache reads + 5 × output.
+- Subagents: the fixture capture also records where Claude Code 2.1.329 writes subagent transcripts; `src/usage.ts` includes every subagent transcript that belongs to the session, and a session whose subagent transcripts can't be found is `unknown`.
 - Any call with unrecoverable usage makes the session total `unknown`; an `unknown` on either side makes a packaging ratio `inconclusive`.
 - Tests on the captured fixtures: repeated message ids counted once; a missing usage field propagates as `unknown`.
 
 ## Phase 1b · Snake evaluation (spec §12)
 
 ### T13 · Snake task and runner (~1.5 h)
-- `snake/starter/TASK.md` and `snake/starter/AGENTS.md`: copied word for word from CHE-1166's `snake-starter/`, and the runner checks their hashes against the `starterHash` and `taskHash` in CHE-1166's accepted manifest (`results/snake-20261121-02/manifest.json`).
+- `snake/starter/TASK.md` and `snake/starter/AGENTS.md`: copied word for word from CHE-1166's `snake-starter/`. The runner recomputes CHE-1166's own hashes with its own functions (`hashTree` over the starter folder for `starterHash`, `hashBytes` of `TASK.md` for `taskHash`, read from its repo at the manifest's `codeCommit`) and compares them with the accepted manifest (`results/snake-20261121-02/manifest.json`).
 - `snake/prompts.ts`: CHE-1166's boundary, planner, review and retry text as separate strings. At `prepare`, the runner reads `src/snake.ts` from CHE-1166's repo at the manifest's `codeCommit` (`git show <commit>:src/snake.ts`), extracts the same four strings, and refuses to start unless each matches exactly. Run-dependent text (the task, assignment, exit codes) is filled in the same places as in CHE-1166.
 - `src/snake.ts`, a port of CHE-1166's `snake-human-review-v2` runner to this harness:
   - `prepare <run id>`: for each arm, a workspace that is a fresh git repo with one commit holding only `TASK.md`, `AGENTS.md` and an empty `src/` (the base commit); a random arm order; random labels A to C; a manifest with hashes, run configuration and limitations. The manifest, logs and mapping live under `results/<run id>/private/`.
   - `run <run id>`, one arm at a time in the manifest's order:
-    - Claude only: a new standalone headless session `claude -p --model claude-opus-5-5 --effort high --session-id <uuid> --tools Read,Write,Edit --permission-mode acceptEdits --strict-mcp-config --setting-sources ""` in the workspace, given CHE-1166's boundary text and the task. `acceptEdits` lets it save the file; `--tools` keeps the shell and web tools out. Before the scored run, an unscored smoke session in a scratch folder must write a file with these exact flags.
+    - Claude only: a new standalone headless session `claude -p --model claude-opus-5-5 --effort high --session-id <uuid> --tools Read,Write,Edit --permission-mode acceptEdits --strict-mcp-config --setting-sources ""` in the workspace, given CHE-1166's boundary text and the task. `acceptEdits` lets it save the file; `--tools` keeps the shell and web tools out. Before the scored run, an unscored smoke session in a scratch folder must write a file with these exact flags. Every Claude session in this phase (Claude only, planner, reviewer) uses Che's normal Claude login but runs inside a Seatbelt profile that denies reading the other arms' workspaces, this repo's `results/` and `runs/` folders, the output folder and CHE-1166's repo; a test proves a Claude session can't read another arm's file or the mapping.
     - Inkling only: `local-worker run` with an `artifact` task, working directly in the arm's workspace (T3), same boundary text and task.
-    - Both solo arms use CHE-1166's rule (spec §12.2): success = exit 0, no timeout, only the artifact changed, and a non-empty file; otherwise retry with its retry text, keeping the existing file. The same rule decides when the hybrid arm's Claude review runs.
+    - Both solo arms use CHE-1166's rule (spec §12.2): success = exit 0, no timeout and a non-empty file; otherwise retry with its retry text, keeping the existing file. The same rule decides when the hybrid arm's Claude review runs.
     - Hybrid: a new standalone Claude session (same settings, read-only tools) writes one assignment without code, using CHE-1166's planner prompt; Inkling builds; a new Claude review session reads the file and answers accept, revise with a scoped correction, or blocked, in CHE-1166's decision shape and review prompt; up to 3 attempts.
-    - After every attempt: scope check (only `src/snake.html` changed), file present and non-empty, hash and size saved. A correction or retry continues in the same workspace from the previous attempt's file, as in CHE-1166.
+    - After every attempt: file present and non-empty, hash and size saved, and a copy of every non-empty file kept in the arm's private folder. A scope violation (anything other than `src/snake.html` changed) ends the arm as failed, as in CHE-1166. A correction or retry continues in the same workspace from the previous attempt's file, as in CHE-1166.
+    - What Che gets: the arm's final file if the arm succeeded; otherwise the last kept non-empty copy from an attempt without a scope violation, if any, published from the kept copy with its hash checked.
   - Every Claude session id and every Inkling request is logged for T12. Elapsed time is measured per arm, with no cutoff.
   - `publish <run id>`: copy the three games to `~/projects/local-ai-output/<run id>/` as `A.html` to `C.html` with an index page that shows only each label and a game link, or "no playable game". No timings, attempts, outcomes or usage appear there (CHE-1166's index showed timings; this one doesn't, to keep the review blind). Everything else stays in `results/<run id>/private/` until Che submits.
-- Tests on the fake server: a full dry run through the real runner with scripted Inkling and stubbed Claude sessions produces three labelled files and a private manifest and ledger; Inkling's file is the one Claude's review reads and the one published; a hybrid revision keeps and edits the previous file; a call that exits non-zero after writing a file is retried; a scope violation stops that arm; a changed task file is refused; the index contains no timing or outcome text.
+- Tests on the fake server: a full dry run through the real runner with scripted Inkling and stubbed Claude sessions produces three labelled files and a private manifest and ledger; Inkling's file is the one Claude's review reads and the one published; a hybrid revision keeps and edits the previous file; a call that exits non-zero after writing a file is retried; a scope violation stops that arm; a changed task file is refused; the index contains no timing or outcome text. A final failed attempt that empties the file still publishes the earlier kept copy.
 
 ### T14 · Run the Snake evaluation [gate] (~1 h, mostly unattended)
 - Load Inkling 2 Mini at 131,072 context (run configuration), run the three arms, unload.
 - Done when: three games are ready (or recorded as failed) in the output folder and every arm's stats are saved.
 
 ### T15 · Che's review page and report (~1 h, then Che's play time)
-- An html-pages choice page: per game A to C, works (fully, partly, not at all), score 1 to 5, and notes; then a ranking of all six Snakes, listing Claude's three by label and GPT's three by CHE-1166's labels. Nothing about Claude's three beyond label and link appears before submission; a game with no file is shown as "no playable game" and ranked last. Whether a game came from a failed arm is shown only after submission.
+- An html-pages choice page: per game A to C, works (fully, partly, not at all), score 1 to 5, and notes; then a ranking of all six Snakes, listing Claude's three by label and GPT's three by CHE-1166's labels. Nothing about Claude's three beyond label and link appears before submission; a game with no file is shown as "no playable game" and ranked last. Whether a game came from a failed arm is shown only after submission. The page is a private claude.ai page holding only questions and labels; the games themselves stay local, and the page tells Che to open `~/projects/local-ai-output/<run id>/index.html` on his Mac.
 - After Che submits: reveal the mapping and publish the report with all six side by side: Che's ratings and ranking; elapsed time, attempts, outcome, frontier tokens (raw and cost-weighted for Claude; as CHE-1166 recorded them for GPT), Inkling tokens, and the hybrid review notes. CHE-1166's files are read only.
 
 ## Phase 2 · Model test
@@ -163,7 +167,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - Per issue, two new standalone Claude Code sessions (not forks; Opus 5.5 at the same effort; session ids saved), each on its own worktree of the base commit, each given only the task file and base commit, with no access to the other's worktree or results folder:
   - Hybrid: orchestrates the local model with `local-worker`.
   - Baseline: Claude alone.
-- Each finishes only when it passes the same checks and the same review step. The baseline worktree is removed after evidence is saved.
+- Each finishes only when `local-worker check` passes on its final commit and the same review step accepts it. The baseline worktree is removed after evidence is saved.
 
 ### T21 · Integrate and merge (~1 h, needs Che)
 - Merge the hybrid result into the issue branch serially, re-run every check on the merged commit with the Check profile (blocked outcome included), then run Card Table's own `bun run typecheck` and `bun test` on that exact commit with no sentinel added; both must pass. Re-review any conflict resolution.
@@ -179,10 +183,9 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 
 ## Order
 
-- Now, no model server: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10 (fake server) → T12 → T13 → T16.
-- After Che's word on CHE-1166: T10 (real) → T11 if needed → T14 → T15 → T17 → T18 → T19 → T20 → T21 → T22 → T23.
+T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10 (fake server, then real) → T11 if needed → T12 → T13 → T14 → T15 → T16 → T17 → T18 → T19 → T20 → T21 → T22 → T23. The model-server gate is lifted, so T10's real run and the Snake evaluation follow straight after the build.
 
-Estimate (not a limit): about 2.5 days of build before the gate; after it, Claude's three Snakes are ready for Che to play within about 2 hours.
+Estimate (not a limit): about 2.5 days of build through T13; Claude's three Snakes are ready for Che to play about 2 hours after that.
 
 ## Reviews
 
