@@ -1,10 +1,10 @@
 // T13: the Snake runner end to end with stubbed sessions, plus the Opus blinding profile under real Seatbelt.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepare, publish, REPO, run, type Arm, type Manifest, type Paths, type Runners } from '../src/snake';
+import { prepare, publish, publishCombined, REPO, run, type Arm, type Manifest, type Paths, type Runners } from '../src/snake';
 import type { WorkerResult } from '../src/workers/claude-code';
 import { opusProfile, type OpusCall, type OpusResult } from '../src/workers/opus';
 
@@ -135,4 +135,22 @@ test('the Opus profile hides other arms, the mapping and Che\'s CLAUDE.md, and l
   } finally {
     await rm(base, { recursive: true, force: true });
   }
+});
+
+test('a combined page shuffles games from several runs, shows only labels, and keeps the mapping private', async () => {
+  const one = await fresh();
+  const seen = { localPrompts: [] as string[], reviewedFiles: [] as string[] };
+  await run(one.id, one.p, stubs([{ write: 'q4-inkling' }], [{ write: 'claude' }], seen), ['claude', 'inkling']);
+  const two = await fresh();
+  await run(two.id, two.p, stubs([{ write: 'q8-inkling' }], [], seen), ['inkling']);
+  // Both runs share one results root for this test.
+  const p: Paths = { results: join(root, 'combined', 'results'), runs: join(root, 'combined', 'runs'), output: join(root, 'combined', 'out') };
+  for (const x of [one, two]) await cp(join(x.p.results, x.id), join(p.results, x.id), { recursive: true });
+  const index = await publishCombined('combined-1', [{ runId: one.id, arms: ['claude', 'inkling'] }, { runId: two.id, arms: ['inkling'] }], p);
+  const html = await readFile(index, 'utf8');
+  for (const word of ['q4', 'q8', 'inkling', 'opus', 'hybrid']) expect(html.toLowerCase()).not.toContain(word);
+  const files = await Promise.all(['A', 'B', 'C'].map(l => readFile(join(p.output, 'combined-1', `${l}.html`), 'utf8')));
+  expect(files.sort()).toEqual(['claude', 'q4-inkling', 'q8-inkling']);
+  const mapping = JSON.parse(await readFile(join(p.results, 'combined-1', 'private', 'mapping.json'), 'utf8')) as { mapping: Record<string, { arm: string }> };
+  expect(Object.keys(mapping.mapping).sort()).toEqual(['A', 'B', 'C']);
 });

@@ -319,5 +319,49 @@ if (import.meta.main) {
     const results = await run(id, defaultPaths(), realRunners(), only);
     console.log(JSON.stringify(results.map(r => ({ label: r.label, outcome: r.outcome, attempts: r.attempts.length })), null, 2));
   } else if (mode === 'publish') console.log(await publish(id));
+  else if (mode === 'publish-combined') {
+    // publish-combined <name> <runId>:<arm,arm> [<runId>:<arm,arm> ...]
+    const sources = rest.map(s => { const [runId, arms] = s.split(':'); return { runId: runId ?? '', arms: (arms ?? '').split(',') as Arm[] }; });
+    console.log(await publishCombined(id, sources));
+  }
   else throw new Error('unknown mode');
+}
+
+/**
+ * One blind page across several runs: every kept game from the named arms, shuffled and labelled A, B, C, ...
+ * The label-to-run mapping is saved privately; the index shows only labels.
+ */
+export async function publishCombined(name: string, sources: { runId: string; arms: Arm[] }[], paths = defaultPaths()): Promise<string> {
+  checkRunId(name);
+  const games: { runId: string; arm: Arm; kept: string; hash: string }[] = [];
+  for (const s of sources) {
+    const m = await loadManifest(s.runId, paths);
+    for (const arm of s.arms) {
+      const raw = await readFile(join(paths.results, s.runId, 'private', m.labels[arm], 'result.json'), 'utf8');
+      const r = JSON.parse(raw) as ArmResult;
+      if (!r.kept || !r.keptHash) { games.push({ runId: s.runId, arm, kept: '', hash: '' }); continue; }
+      if (sha(await readFile(r.kept)) !== r.keptHash) throw new Error(`kept file for ${s.runId}/${arm} changed`);
+      games.push({ runId: s.runId, arm, kept: r.kept, hash: r.keptHash });
+    }
+  }
+  const out = join(paths.output, name);
+  const priv = join(paths.results, name, 'private');
+  await mkdir(paths.output, { recursive: true });
+  await mkdir(out, { recursive: false });
+  await mkdir(priv, { recursive: true });
+  const order = shuffle(games);
+  const mapping: Record<string, { runId: string; arm: Arm; hash: string }> = {};
+  const rows: string[] = [];
+  for (const [i, g] of order.entries()) {
+    const label = String.fromCharCode(65 + i);
+    mapping[label] = { runId: g.runId, arm: g.arm, hash: g.hash };
+    if (g.kept) {
+      await writeFile(join(out, `${label}.html`), await readFile(g.kept), { flag: 'wx' });
+      rows.push(`<li>Game ${label}: <a href="${label}.html">Open game</a></li>`);
+    } else rows.push(`<li>Game ${label}: no playable game</li>`);
+  }
+  await writeFile(join(priv, 'mapping.json'), JSON.stringify({ createdAt: new Date().toISOString(), mapping }, null, 2) + '\n', { flag: 'wx' });
+  const index = join(out, 'index.html');
+  await writeFile(index, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Snake: Claude round</title><body style="font:16px/1.5 system-ui;max-width:40rem;margin:2rem auto;padding:0 1rem"><h1>Snake: Claude round</h1><p>${order.length} games built from the same contract as the GPT round. Play each one and rate it by letter. The labels are random.</p><ol>${rows.join('\n')}</ol></body></html>\n`, { flag: 'wx' });
+  return index;
 }
