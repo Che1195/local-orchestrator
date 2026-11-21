@@ -1,8 +1,8 @@
 # CHE-1170 · Local orchestrator · Implementation plan
 
-Spec: SPEC.md rev 6 (rev 5 approved by Che on November 21, 2026; rev 6 adds the arcade evaluation and awaits his re-approval). The spec wins where they differ.
+Spec: SPEC.md rev 6 (rev 5 approved by Che on November 21, 2026; rev 6 adds the Snake evaluation and awaits his re-approval). The spec wins where they differ.
 
-Status: draft rev 2, revised after plan review round 1 (gpt-6.1-sol and gpt-6.1-terra, high) and Che's arcade request. Nothing built yet.
+Status: draft rev 2, revised after plan review round 1 (gpt-6.1-sol and gpt-6.1-terra, high) and Che's Snake request. Nothing built yet.
 
 ## Ground rules
 
@@ -30,7 +30,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - Tests: scripted replies round-trip; a killed client shows as a disconnect.
 
 ### T3 · Task file, run states and ledger (~1 h)
-- `src/task.ts`: the task file (JSON) with hand-written guards: `id`, `repo`, `baseCommit`, `taskType` (`behavior` | `bugfix` | `refactor` | `tests` | `artifact`), `writablePaths[]`, `instructions`, `checks[]` (name + command), `testReport` (JUnit path), `testManifest` (path outside the repo, T7), `sentinelTest` (name), and per type: `structuralCheck` for `refactor`; `mutantsDir` and `referenceTestsDir` outside the repo for `tests`; `artifactFile` for `artifact` (the arcade games, no checks).
+- `src/task.ts`: the task file (JSON) with hand-written guards: `id`, `repo`, `baseCommit`, `taskType` (`behavior` | `bugfix` | `refactor` | `tests` | `artifact`), `writablePaths[]`, `instructions`, `checks[]` (name + command), `testReport` (JUnit path), `testManifest` (path outside the repo, T7), `sentinelTest` (name), and per type: `structuralCheck` for `refactor`; `mutantsDir` and `referenceTestsDir` outside the repo for `tests`; `artifactFile` for `artifact` (the Snake games, no checks).
 - Attempt states. `local-worker` never decides a local pass by itself:
   - The script ends an attempt as `checks-passed`, `model-fail`, `infra-fail`, `blocked` or `forged` (for `artifact` tasks: `artifact-present` or `model-fail`).
   - Claude then records a review with `local-worker review --task <id> --attempt <n> --accept|--reject --reason <text>`.
@@ -61,7 +61,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 
 ### T6 · Process supervisor and cancellation (~1 h)
 - `src/supervise.ts`: start a command in a new process group and record every descendant's pid as it appears (polling `ps -o pid,pgid,ppid`); at the deadline send TERM, then KILL after 5 s, to the group and to any recorded descendant that moved to another group. Report whether output was still arriving at the deadline.
-- Deadlines (spec §6.3): 20 minutes for the worker; 10 minutes for all check runs of an attempt together, mutant runs included. Arcade (`artifact`) tasks have no deadline (spec §12.2).
+- Deadlines (spec §6.3): 20 minutes for the worker; 10 minutes for all check runs of an attempt together, mutant runs included. Snake (`artifact`) tasks have no deadline (spec §12.2).
 - Cancellation evidence: the worker's HTTP connection closing is the cancel signal. Proof that the server stopped generating comes from the server: the fake server's disconnect log now, and LM Studio's request log at verbosity 3 (`lms log stream`) [gate], which must show the request ending within 10 s of the kill. No evidence means the calibration step is `blocked`.
 - Tests: a child that spawns grandchildren in a new group is fully killed; a hung child is killed at the deadline; the fake server records the disconnect.
 
@@ -111,29 +111,28 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - Any call with unrecoverable usage makes the session total `unknown`; an `unknown` on either side makes a packaging ratio `inconclusive`.
 - Tests on the captured fixtures: repeated message ids counted once; a missing usage field propagates as `unknown`.
 
-## Phase 1b · Arcade evaluation (spec §12)
+## Phase 1b · Snake evaluation (spec §12)
 
-### T13 · Arcade contracts and runner (~2 h)
-- `arcade/snake/TASK.md`: copied word for word from CHE-1166's `snake-starter/TASK.md`, hash recorded and compared with CHE-1166's file.
-- `arcade/maze/TASK.md`: an original maze-chase contract written in the same form and detail (one self-contained HTML file, canvas maze, dots, chasers, power-ups, score and best score, ready state, pause, keyboard and touch controls, phone layout, guarded localStorage, and the same file-writing and no-testing rules). Frozen and hashed before any run.
-- `src/arcade.ts`, a port of CHE-1166's Snake protocol to this harness:
-  - `prepare <run id>`: for each game, three empty workspaces; random arm order; random labels for the six games; a manifest with hashes, run configuration and limitations.
-  - `run <run id>`: for each game and arm in order:
-    - Claude only: a new standalone headless session `claude -p --model claude-opus-5-5 --effort high --session-id <uuid>` with `--tools Read,Write,Edit` only, `--strict-mcp-config`, `--setting-sources ""`, in the workspace. New attempt only if the file is missing or empty.
-    - Inkling only: `local-worker run` with an `artifact` task in the workspace. New attempt only if the file is missing or empty.
-    - Hybrid: a new standalone Claude session (same settings, read-only tools) writes one assignment without code; Inkling builds; a new Claude review session reads the file and answers accept or a scoped correction, in a fixed JSON shape; up to 3 attempts.
-    - After every attempt: scope check (only the game file changed), file present and non-empty, hash and size saved.
+### T13 · Snake task and runner (~1.5 h)
+- `snake/TASK.md`: copied word for word from CHE-1166's `snake-starter/TASK.md`; the runner refuses to start if its hash differs from CHE-1166's file.
+- `src/snake.ts`, a port of CHE-1166's `snake-human-review-v2` runner to this harness:
+  - `prepare <run id>`: three empty workspaces, a random arm order, random labels A to C, and a manifest with hashes, run configuration and limitations.
+  - `run <run id>`, one arm at a time in the manifest's order:
+    - Claude only: a new standalone headless session `claude -p --model claude-opus-5-5 --effort high --session-id <uuid>` with `--tools Read,Write,Edit` only, `--strict-mcp-config`, `--setting-sources ""`, in the workspace, given CHE-1166's boundary text and the task. A new attempt only if the file is missing or empty.
+    - Inkling only: `local-worker run` with an `artifact` task in the workspace, same boundary text and task. A new attempt only if the file is missing or empty.
+    - Hybrid: a new standalone Claude session (same settings, read-only tools) writes one assignment without code, using CHE-1166's planner prompt; Inkling builds; a new Claude review session reads the file and answers accept, revise with a scoped correction, or blocked, in CHE-1166's decision shape and review prompt; up to 3 attempts.
+    - After every attempt: scope check (only `src/snake.html` changed), file present and non-empty, hash and size saved.
   - Every Claude session id and every Inkling request is logged for T12. Elapsed time is measured per arm, with no cutoff.
-  - `publish <run id>`: copy the six games to `~/projects/local-ai-output/<run id>/` as `A.html` to `F.html` with an index page. The label-to-arm mapping stays in `results/<run id>/private/`.
-- Tests on the fake server: a full dry run with scripted Inkling and stubbed Claude sessions produces six labelled files, a manifest and a ledger; a scope violation stops that arm.
+  - `publish <run id>`: copy the three games to `~/projects/local-ai-output/<run id>/` as `A.html` to `C.html` with an index page. The label-to-arm mapping stays in `results/<run id>/private/`.
+- Tests on the fake server: a full dry run with scripted Inkling and stubbed Claude sessions produces three labelled files, a manifest and a ledger; a scope violation stops that arm; a changed task file is refused.
 
-### T14 · Run the arcade evaluation [gate] (~half day, mostly unattended)
-- Load Inkling 2 Mini at 131,072 context (run configuration), run all six arms in the manifest's order, unload.
-- Done when: six games are ready (or recorded as failed) in the output folder and every arm's stats are saved.
+### T14 · Run the Snake evaluation [gate] (~1 h, mostly unattended)
+- Load Inkling 2 Mini at 131,072 context (run configuration), run the three arms, unload.
+- Done when: three games are ready (or recorded as failed) in the output folder and every arm's stats are saved.
 
-### T15 · Che's blind review page and report (~1 h, then Che's play time)
-- An html-pages choice page listing games A to F with a link to the output folder: per game, works (fully, partly, not at all), score 1 to 5, and notes. No arm or model names on the page.
-- After Che submits: reveal the mapping and publish the report: per game, Che's rating beside elapsed time, attempts, Claude tokens (raw and cost-weighted), Inkling tokens and the hybrid review notes; and CHE-1166's Snake stats beside the Snake rows, read-only.
+### T15 · Che's review page and report (~1 h, then Che's play time)
+- An html-pages choice page: per game A to C, works (fully, partly, not at all), score 1 to 5, and notes; then a ranking of all six Snakes, listing Claude's three by label and GPT's three by CHE-1166's labels. No arm or model names for Claude's three.
+- After Che submits: reveal the mapping and publish the report with all six side by side: Che's ratings and ranking; elapsed time, attempts, outcome, frontier tokens (raw and cost-weighted for Claude; as CHE-1166 recorded them for GPT), Inkling tokens, and the hybrid review notes. CHE-1166's files are read only.
 
 ## Phase 2 · Model test
 
@@ -179,7 +178,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - Now, no model server: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10 (fake server) → T12 → T13 → T16.
 - After Che's word on CHE-1166: T10 (real) → T11 if needed → T14 → T15 → T17 → T18 → T19 → T20 → T21 → T22 → T23.
 
-Estimate (not a limit): about 2.5 days of build before the gate; after it, the arcade games are ready for Che to play within about half a day.
+Estimate (not a limit): about 2.5 days of build before the gate; after it, Claude's three Snakes are ready for Che to play within about 2 hours.
 
 ## Reviews
 
