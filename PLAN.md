@@ -8,7 +8,7 @@ Status: draft rev 2, revised after plan review round 1 (gpt-6.1-sol and gpt-6.1-
 
 - Bun 1.4.3 + TypeScript, no `any`. Checks for this repo: `bun run typecheck`, `bun run lint`, `bun test`.
 - Branch `che-1170-local-orchestrator`. The repo is local; a PR needs a GitHub repo (decision on the page).
-- **Model-server gate:** no task sends a request to LM Studio, or loads or unloads a model, until CHE-1166's scored run is finished and Che says so in chat. Tasks marked **[gate]** wait; everything else uses the fake model server (T2) and can be built now.
+- **Model-server gate: lifted** by Che in chat on November 21 (CHE-1166 is done). Tasks marked **[gate]** use the real LM Studio server and may run once their build steps are done; tests still use the fake model server (T2).
 - Every task ends with its named check run; results go to Linear at each milestone.
 
 ## Key idea: a fake model server

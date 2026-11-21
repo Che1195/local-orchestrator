@@ -32,6 +32,8 @@ Che, November 21, on the spec review page (verdict: approve, on rev 1d78f0b):
 
 Che, November 21, in chat, after approval (needs re-approval on the page):
 
+- Model-server gate lifted: Che said in chat on November 21 that CHE-1166 is done with the model server. This project may now send requests and load or unload models, still without changing LM Studio's global settings (§6.6).
+- Snake evaluation worker program: Claude's default (headless Claude Code, Codex CLI only as the fallback), not CHE-1166's Codex CLI; the difference stays listed in §12.5.
 - Before Card Table, add a Snake evaluation that mirrors CHE-1166's with Claude as the frontier model: the same Snake built three ways, which with GPT's three makes six to compare (§12). Che plays and judges every finished game; Claude does everything up to "ready" and keeps the stats.
 
 ## 4. Terms
