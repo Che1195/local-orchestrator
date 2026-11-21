@@ -2,7 +2,7 @@
   "label": "Local orchestrator",
   "pages": {
     "local-orchestrator": {
-      "answers": "none",
+      "answers": "submitted",
       "file": "local-orchestrator.html",
       "id": "local-orchestrator/local-orchestrator/5b9dfe44",
       "publish": "published",

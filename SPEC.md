@@ -2,7 +2,7 @@
 
 Issue: https://linear.app/chedev/issue/CHE-1170/claude-orchestrates-local-models-for-real-coding-work
 
-Status: draft rev 5 for Che's review, November 21, 2026. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and the closing audit (Sol, Terra, Gemini 4 Neon high). The review cap is reached; rev 5's fixes to the audit's findings were not re-reviewed. Nothing built yet.
+Status: rev 5, approved by Che on November 21, 2026. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and the closing audit (Sol, Terra, Gemini 4 Neon high). The review cap is reached; rev 5's fixes to the audit's findings were not re-reviewed. Nothing built yet.
 
 ## 1. Goal
 
@@ -24,7 +24,11 @@ Che, November 21:
 - Worker program: picked by the phase 1 calibration (§7). Headless Claude Code pointed at the local model is tried first; Codex CLI is the fallback.
 - Tracking: its own Linear issue, related to CHE-1166, not part of that experiment.
 
-Open for Che (on the review page): how this shares the model server with CHE-1166 (§6.6), whether savings are measured against a real Claude-only run (§6.5), and the savings bar for packaging (§9).
+Che, November 21, on the spec review page (verdict: approve, on rev 1d78f0b):
+
+- Sharing with CHE-1166: wait. No model requests, loads or unloads until CHE-1166's scored run is finished and Che says so in chat (§6.6).
+- Baseline: a real Claude-only run of each Card Table task (§6.5).
+- Packaging bar: 60% after dispatch, plus the 80% total guard (§9).
 
 ## 4. Terms
 
@@ -105,15 +109,15 @@ The worker never grades its own work.
 - Shared preparation, meaning the task file and protected tests, is done once and used by both the hybrid and the baseline. Its usage is reported on its own line and left out of the comparison.
 - The comparison covers everything after dispatch: for the hybrid, reviews, corrections and escalation code; for the baseline, Claude's whole implementation plus the same required review and any revisions that review prompts. Both runs pass the same checks and the same review before they count.
 - One number decides the comparison, cost-weighted tokens: input + 1.25 × cache writes + 0.1 × cache reads + 5 × output, the ratios of Opus 5.5's API prices. The raw categories are reported too.
-- Baseline (open decision): suggested is a real Claude-only run of each Card Table task from the same base commit, task file and protected tests, in a separate worktree, discarded afterwards. The alternative is an estimate, which makes every savings figure hypothetical.
+- Baseline (Che: real): a real Claude-only run of each Card Table task from the same base commit, task file and protected tests, in a separate worktree, discarded afterwards. The alternative is an estimate, which makes every savings figure hypothetical.
 - Code share is descriptive only: lines of production code in the accepted diff written by the worker, excluding tests, generated files and formatting. Code Claude wrote during escalation counts as Claude's.
 
 ### 6.6 Sharing the model server with CHE-1166
 
 Both projects use the same LM Studio server and memory. Model requests, loads and unloads by this project can distort CHE-1166's scored runs.
 
-- Suggested: this project sends no model requests and loads or unloads no models until CHE-1166's scored Snake run is finished and Che says so in chat.
-- Alternative: Che hands the server over per session in chat, and CHE-1166 doesn't run while this project holds it.
+- Chosen by Che: this project sends no model requests and loads or unloads no models until CHE-1166's scored Snake run is finished and Che says so in chat.
+- Not chosen: per-session handoffs.
 - Either way, this project never changes LM Studio's global settings, and it releases the server with no model requests in flight.
 
 ### 6.7 Packaging
@@ -140,7 +144,7 @@ If several qualify, the best model has the most local passes; ties go to fewer t
 - Phase 1: the calibration passes end to end, every canary is blocked, every tamper case is caught (recorded where only review caught it), and a timed-out attempt leaves no process or model request running. `local-worker` passes typecheck and lint.
 - Phase 2: results saved for every model and attempt, failures included, with the qualify decision per §8.
 - Phase 3: at least one real Card Table issue merged with all Card Table checks passing and Claude's review accepted; every escalation and Claude rewrite recorded.
-- Packaging bar (open decision): suggested is the hybrid's cost-weighted Claude tokens after dispatch (§6.5) at most 60% of the real baseline's, summed across all phase 3 tasks with escalations included, with both passing all checks and Claude's review. A second guard on the same sums: the hybrid's total including shared preparation is at most 80% of the baseline's total including the same preparation, so a small saving on top of large shared prep can't pass. With an estimated baseline, the result is reported as inconclusive, and packaging needs Che's call.
+- Packaging bar (Che: 60%): the hybrid's cost-weighted Claude tokens after dispatch (§6.5) at most 60% of the real baseline's, summed across all phase 3 tasks with escalations included, with both passing all checks and Claude's review. A second guard on the same sums: the hybrid's total including shared preparation is at most 80% of the baseline's total including the same preparation, so a small saving on top of large shared prep can't pass. With an estimated baseline, the result is reported as inconclusive, and packaging needs Che's call.
 
 ## 10. Out of scope (v1)
 
