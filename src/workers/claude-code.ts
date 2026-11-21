@@ -8,7 +8,10 @@ import { makeTaskHome, scrubbedEnv } from '../env';
 import { supervise } from '../supervise';
 
 export const CODE_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash'] as const;
-export const ARTIFACT_TOOLS = ['Read', 'Edit', 'Write'] as const;
+// Inkling calls Bash even when told not to run anything. LM Studio constrains tool calls to the
+// listed tools, and an unlisted name crashes its decoder (500 "empty grammar stack"), so it is listed.
+// The Worker Seatbelt profile is the boundary: no network, writes only to the writable paths.
+export const ARTIFACT_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash'] as const;
 
 export interface LocalModel {
   /** Model id the server knows, for example inkling2-mini-q4. */

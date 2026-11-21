@@ -68,6 +68,7 @@ export interface ArmResult {
   elapsedMs: number;
   outcome: 'running' | 'artifact_ready_for_user' | 'failed';
   calls: CallLog[];
+  harnessCommit?: string;
   attempts: { round: number; scope: string[]; present: boolean; hash: string | null; bytes: number }[];
   kept: string | null;
   keptHash: string | null;
@@ -193,7 +194,7 @@ export async function runArm(m: Manifest, arm: Arm, paths: Paths, runners: Runne
   if ((await scopeViolations(ws)).length || (await readdir(join(ws, 'src'))).length) throw new Error(`workspace ${label} is not fresh`);
   const task = await readFile(join(ws, 'TASK.md'), 'utf8');
   const start = Date.now();
-  const r: ArmResult = { label, arm, startedAt: new Date(start).toISOString(), elapsedMs: 0, outcome: 'running', calls: [], attempts: [], kept: null, keptHash: null };
+  const r: ArmResult = { label, arm, startedAt: new Date(start).toISOString(), elapsedMs: 0, outcome: 'running', calls: [], attempts: [], kept: null, keptHash: null, harnessCommit: (await git(REPO, 'rev-parse', 'HEAD')).trim() };
   const save = async () => { r.elapsedMs = Date.now() - start; await writeFile(join(dir, 'result.json'), JSON.stringify(r, null, 2) + '\n'); };
   const hidden = [REPO, OUTPUT_ROOT, CHE1166, paths.results, paths.runs, paths.output];
 

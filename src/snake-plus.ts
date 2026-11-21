@@ -75,7 +75,7 @@ export async function runPlus(id: string, paths: Paths = defaultPaths(), runners
   if ((await scopeViolations(ws)).length || (await readdir(join(ws, 'src'))).length) throw new Error('workspace is not fresh');
   const task = await readFile(join(ws, 'TASK.md'), 'utf8');
   const start = Date.now();
-  const r: ArmResult = { label: 'A', arm: 'plus', startedAt: new Date(start).toISOString(), elapsedMs: 0, outcome: 'running', calls: [], attempts: [], kept: null, keptHash: null };
+  const r: ArmResult = { label: 'A', arm: 'plus', startedAt: new Date(start).toISOString(), elapsedMs: 0, outcome: 'running', calls: [], attempts: [], kept: null, keptHash: null, harnessCommit: (await git(REPO, 'rev-parse', 'HEAD')).trim() };
   const save = async () => { r.elapsedMs = Date.now() - start; await writeFile(join(dir, 'result.json'), JSON.stringify(r, null, 2) + '\n'); };
   const hidden = [REPO, OUTPUT_ROOT, CHE1166, paths.results, paths.runs, paths.output];
   const versions: { name: string; kept: string; hash: string }[] = [];

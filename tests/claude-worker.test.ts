@@ -35,11 +35,23 @@ test('scripted write then finish: the file lands and effort reaches the server',
   expect(r.survivors).toEqual([]);
 }, 90_000);
 
-test('artifact sessions have no shell or web tools', async () => {
+test('artifact sessions have exactly the listed tools and no web or agent tools', async () => {
   const { r, fake } = await attempt([{ kind: 'reply', content: [{ type: 'text', text: 'ok' }] }]);
-  expect(r.toolsSeen.sort()).toEqual(['Edit', 'Read', 'Write']);
+  expect(r.toolsSeen.sort()).toEqual([...ARTIFACT_TOOLS].sort());
   const names = ((fake.requests[0]?.body as { tools?: { name: string }[] }).tools ?? []).map(t => t.name);
-  for (const banned of ['Bash', 'WebFetch', 'WebSearch', 'Task', 'Agent']) expect(names).not.toContain(banned);
+  for (const banned of ['WebFetch', 'WebSearch', 'Task', 'Agent']) expect(names).not.toContain(banned);
+}, 90_000);
+
+test('the shell inside the worker cannot reach the network or write outside src', async () => {
+  const wtPath = join(root, `wt-${n}`);
+  const { r } = await attempt([
+    { kind: 'reply', content: [{ type: 'tool_use', name: 'Bash', input: { command: `echo x > ${wtPath}/evil.txt; /usr/bin/curl -sf -m 3 https://example.com > ${wtPath}/src/net.txt; echo ok > ${wtPath}/src/fine.txt` } }], stopReason: 'tool_use' },
+    { kind: 'reply', content: [{ type: 'text', text: 'done' }] }
+  ]);
+  expect(r.status).toBe('finished');
+  expect(await Bun.file(join(wtPath, 'evil.txt')).exists()).toBe(false);
+  expect(await Bun.file(join(wtPath, 'src', 'fine.txt')).exists()).toBe(true);
+  expect(await Bun.file(join(wtPath, 'src', 'net.txt')).text()).toBe('');
 }, 90_000);
 
 test('a write outside the writable path is refused by the sandbox', async () => {
