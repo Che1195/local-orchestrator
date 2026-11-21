@@ -137,7 +137,7 @@ export async function prepare(id: string, local: Manifest['local'], paths = defa
       'One small task; not proof that local models can replace Claude.',
       'Worker program differs from CHE-1166: headless Claude Code here, Codex CLI there. Same model file, context and effort setting.',
       'Inkling\'s per-response output is capped at the configured maxOutputTokens by Claude Code; Codex had no stated cap.',
-      'Claude sessions run on Che\'s normal login with his instructions and memory hidden by Seatbelt; filesystem blinding is policy, not a container.'
+      'Claude sessions run on Che\'s normal login with Che\'s instructions and memory hidden by Seatbelt; filesystem blinding is policy, not a container.'
     ]
   };
   await writeFile(join(priv, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
