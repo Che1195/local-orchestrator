@@ -21,14 +21,20 @@ export const OUTPUT_ROOT = join(homedir(), 'projects', 'local-ai-output');
 const STARTER = join(REPO, 'snake', 'starter');
 const MAX_ATTEMPTS = 3;
 
-export type Arm = 'claude' | 'inkling' | 'hybrid';
+export type Arm = 'claude' | 'inkling' | 'hybrid' | 'plus';
 export const ARMS: Arm[] = ['claude', 'inkling', 'hybrid'];
+
+export function labelOf(m: Pick<Manifest, 'labels'>, arm: Arm): string {
+  const label = m.labels[arm];
+  if (!label) throw new Error(`no ${arm} arm in this run`);
+  return label;
+}
 
 export interface Paths { results: string; runs: string; output: string }
 export const defaultPaths = (): Paths => ({ results: join(REPO, 'results'), runs: join(REPO, 'runs'), output: OUTPUT_ROOT });
 
 export interface Manifest {
-  protocol: 'claude-snake-v1';
+  protocol: 'claude-snake-v1' | 'claude-snake-plus-v1';
   runId: string;
   preparedAt: string;
   starterHash: string;
@@ -38,7 +44,7 @@ export interface Manifest {
   maxAttempts: number;
   claude: { model: string; effort: string };
   local: LocalModel & { quant: string };
-  labels: Record<Arm, string>;
+  labels: Partial<Record<Arm, string>>;
   order: Arm[];
   limitations: string[];
 }
@@ -69,7 +75,7 @@ export interface ArmResult {
   error?: string;
 }
 
-const sha = (b: Uint8Array | string): string => createHash('sha256').update(b).digest('hex');
+export const sha = (b: Uint8Array | string): string => createHash('sha256').update(b).digest('hex');
 
 /** CHE-1166's hashTree, same algorithm: sorted entries, path NUL bytes NUL, skipping build and VCS folders. */
 export async function hashTree(root: string): Promise<string> {
@@ -88,13 +94,13 @@ export async function hashTree(root: string): Promise<string> {
   return hash.digest('hex');
 }
 
-function shuffle<T>(input: T[]): T[] {
+export function shuffle<T>(input: T[]): T[] {
   const a = [...input];
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j] as T, a[i] as T]; }
   return a;
 }
 
-function checkRunId(id: string): void { if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error('bad run id'); }
+export function checkRunId(id: string): void { if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error('bad run id'); }
 
 /** The frozen inputs must match CHE-1166's accepted run, and its prompts must match ours word for word. */
 export async function verifyInputs(): Promise<{ starterHash: string; taskHash: string }> {
@@ -117,7 +123,7 @@ export async function prepare(id: string, local: Manifest['local'], paths = defa
   if (existsSync(join(paths.results, id))) throw new Error('run already exists');
   await mkdir(priv, { recursive: true });
   const labelOrder = shuffle(ARMS);
-  const labels = Object.fromEntries(labelOrder.map((arm, i) => [arm, String.fromCharCode(65 + i)])) as Record<Arm, string>;
+  const labels: Partial<Record<Arm, string>> = Object.fromEntries(labelOrder.map((arm, i) => [arm, String.fromCharCode(65 + i)]));
   for (const label of ['A', 'B', 'C']) {
     const ws = join(paths.runs, id, label, 'workspace');
     await cp(STARTER, ws, { recursive: true, errorOnExist: true, force: false });
@@ -144,7 +150,7 @@ export async function prepare(id: string, local: Manifest['local'], paths = defa
   return manifest;
 }
 
-async function scopeViolations(ws: string): Promise<string[]> {
+export async function scopeViolations(ws: string): Promise<string[]> {
   const errors: string[] = [];
   const src = await lstat(join(ws, 'src')).catch(() => null);
   if (!src || !src.isDirectory() || src.isSymbolicLink()) return ['src must be an ordinary directory'];
@@ -159,13 +165,13 @@ async function scopeViolations(ws: string): Promise<string[]> {
   return errors;
 }
 
-const decisionSchema = {
+export const decisionSchema = {
   type: 'object', additionalProperties: false,
   properties: { decision: { type: 'string', enum: ['implement', 'revise', 'accept', 'blocked'] }, assignment: { type: 'string' }, rationale: { type: 'string' } },
   required: ['decision', 'assignment', 'rationale']
 };
 interface Decision { decision: 'implement' | 'revise' | 'accept' | 'blocked'; assignment: string; rationale: string }
-function readDecision(v: unknown): Decision {
+export function readDecision(v: unknown): Decision {
   const d = v as Partial<Decision> | null;
   if (!d || !['implement', 'revise', 'accept', 'blocked'].includes(String(d.decision)) || typeof d.assignment !== 'string' || typeof d.rationale !== 'string') throw new Error('Invalid Claude decision');
   return d as Decision;
@@ -180,7 +186,7 @@ export interface Runners {
 export const realRunners = (): Runners => ({ opus: runOpus, local: runClaudeWorker, claudeConfigDir: join(homedir(), '.claude') });
 
 export async function runArm(m: Manifest, arm: Arm, paths: Paths, runners: Runners): Promise<ArmResult> {
-  const label = m.labels[arm];
+  const label = labelOf(m, arm);
   const ws = join(paths.runs, m.runId, label, 'workspace');
   const dir = join(paths.results, m.runId, 'private', label);
   await mkdir(dir, { recursive: true });
@@ -278,8 +284,9 @@ export async function run(id: string, paths = defaultPaths(), runners = realRunn
   const m = await loadManifest(id, paths);
   const out: ArmResult[] = [];
   for (const arm of m.order) {
+    if (arm === 'plus') continue;
     if (only && !only.includes(arm)) continue;
-    if (existsSync(join(paths.results, id, 'private', m.labels[arm], 'result.json'))) throw new Error(`arm ${m.labels[arm]} already ran; never overwrite`);
+    if (existsSync(join(paths.results, id, 'private', labelOf(m, arm), 'result.json'))) throw new Error(`arm ${labelOf(m, arm)} already ran; never overwrite`);
     out.push(await runArm(m, arm, paths, runners));
   }
   return out;
@@ -337,7 +344,7 @@ export async function publishCombined(name: string, sources: { runId: string; ar
   for (const s of sources) {
     const m = await loadManifest(s.runId, paths);
     for (const arm of s.arms) {
-      const raw = await readFile(join(paths.results, s.runId, 'private', m.labels[arm], 'result.json'), 'utf8');
+      const raw = await readFile(join(paths.results, s.runId, 'private', labelOf(m, arm), 'result.json'), 'utf8');
       const r = JSON.parse(raw) as ArmResult;
       if (!r.kept || !r.keptHash) { games.push({ runId: s.runId, arm, kept: '', hash: '' }); continue; }
       if (sha(await readFile(r.kept)) !== r.keptHash) throw new Error(`kept file for ${s.runId}/${arm} changed`);

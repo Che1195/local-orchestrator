@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { prepare, publish, publishCombined, REPO, run, type Arm, type Manifest, type Paths, type Runners } from '../src/snake';
+import { labelOf, prepare, publish, publishCombined, REPO, run, type Arm, type Manifest, type Paths, type Runners } from '../src/snake';
 import type { WorkerResult } from '../src/workers/claude-code';
 import { opusProfile, type OpusCall, type OpusResult } from '../src/workers/opus';
 
@@ -42,7 +42,7 @@ function stubs(localSteps: LocalStep[], opusSteps: ({ write?: string; decision?:
   };
 }
 
-const result = async (p: Paths, id: string, m: Manifest, arm: Arm) => JSON.parse(await readFile(join(p.results, id, 'private', m.labels[arm], 'result.json'), 'utf8')) as { outcome: string; attempts: unknown[]; error?: string; kept: string | null };
+const result = async (p: Paths, id: string, m: Manifest, arm: Arm) => JSON.parse(await readFile(join(p.results, id, 'private', labelOf(m, arm), 'result.json'), 'utf8')) as { outcome: string; attempts: unknown[]; error?: string; kept: string | null };
 
 test('full dry run: three labelled games, a blind index, and Inkling\'s file is what the review reads', async () => {
   const { id, m, p } = await fresh();
@@ -63,7 +63,7 @@ test('full dry run: three labelled games, a blind index, and Inkling\'s file is 
   const index = await publish(id, p);
   const html = await readFile(index, 'utf8');
   for (const word of ['second', 'attempt', 'failed', 'Opus', 'Inkling', 'Claude only', 'hybrid', 'token']) expect(html.toLowerCase()).not.toContain(word.toLowerCase());
-  expect(await readFile(join(p.output, id, `${m.labels.hybrid}.html`), 'utf8')).toBe('<p>hybrid v2</p>');
+  expect(await readFile(join(p.output, id, `${labelOf(m, 'hybrid')}.html`), 'utf8')).toBe('<p>hybrid v2</p>');
   expect(existsSync(join(p.results, id, 'private', 'manifest.json'))).toBe(true);
 });
 
@@ -89,13 +89,13 @@ test('a scope violation stops the arm; a final empty file still publishes the ea
   expect(c.outcome).toBe('failed');
   await run(id, p, stubs([{ write: '<p>h</p>' }], [{ decision: { decision: 'implement', assignment: 'a', rationale: 'r' } }, { decision: { decision: 'accept', assignment: '', rationale: 'r' } }], seen), ['hybrid']);
   await publish(id, p);
-  expect(await readFile(join(p.output, id, `${m.labels.claude}.html`), 'utf8')).toBe('<p>v1</p>');
-  expect(existsSync(join(p.output, id, `${m.labels.inkling}.html`))).toBe(false);
+  expect(await readFile(join(p.output, id, `${labelOf(m, 'claude')}.html`), 'utf8')).toBe('<p>v1</p>');
+  expect(existsSync(join(p.output, id, `${labelOf(m, 'inkling')}.html`))).toBe(false);
 });
 
 test('a changed task file is refused', async () => {
   const { id, m, p } = await fresh();
-  await writeFile(join(p.runs, id, m.labels.claude, 'workspace', 'TASK.md'), 'changed');
+  await writeFile(join(p.runs, id, labelOf(m, 'claude'), 'workspace', 'TASK.md'), 'changed');
   const seen = { localPrompts: [] as string[], reviewedFiles: [] as string[] };
   await expect(run(id, p, stubs([], [], seen), ['claude'])).rejects.toThrow('not fresh');
 });

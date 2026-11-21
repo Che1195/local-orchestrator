@@ -17,6 +17,8 @@ export interface OpusCall {
   prompt: string;
   profilePath: string;
   jsonSchema?: object;
+  /** Extra folders the session may read (passed as --add-dir too), such as browser evidence. */
+  readable?: string[];
   model?: string;
   effort?: string;
 }
@@ -40,7 +42,7 @@ const lit = (p: string): string => {
 };
 const real = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
 
-export function opusProfile(workspace: string, hidden: string[], canWrite: boolean): string {
+export function opusProfile(workspace: string, hidden: string[], canWrite: boolean, readable: string[] = []): string {
   const home = real(homedir());
   const ws = real(workspace);
   const projects = join(home, 'projects');
@@ -52,7 +54,7 @@ export function opusProfile(workspace: string, hidden: string[], canWrite: boole
 ; Hide the other arms, results, mapping, output and CHE-1166's repo: contents and listings, not metadata,
 ; so Claude Code can still resolve the workspace's parent folders.
 (deny file-read-data ${hidden.map(p => `(subpath ${lit(real(p))})`).join(' ')})
-(allow file-read* file-read-data (subpath ${lit(ws)}))
+(allow file-read* file-read-data (subpath ${lit(ws)})${readable.map(p => ` (subpath ${lit(real(p))})`).join('')})
 ; No writes anywhere under ~/projects except this arm's src folder (and none at all for read-only roles).
 (deny file-write* (subpath ${lit(projects)}))${canWrite ? `
 (allow file-write* (subpath ${lit(join(ws, 'src'))}))` : ''}
@@ -74,6 +76,7 @@ export function opusCommand(claudeBin: string, c: OpusCall, sessionId: string): 
     '--tools', c.tools.join(','), '--permission-mode', c.canWrite ? 'acceptEdits' : 'default', '--strict-mcp-config', '--setting-sources', '',
     '--disable-slash-commands', '--output-format', 'json'];
   if (c.jsonSchema) cmd.push('--json-schema', JSON.stringify(c.jsonSchema));
+  for (const dir of c.readable ?? []) cmd.push('--add-dir', dir);
   return cmd;
 }
 
@@ -82,7 +85,7 @@ interface JsonResult { is_error?: boolean; result?: string; structured_output?: 
 export async function runOpus(c: OpusCall): Promise<OpusResult> {
   const found = Bun.which('claude');
   if (!found) throw new Error('claude is not on PATH');
-  await writeFile(c.profilePath, opusProfile(c.workspace, c.hidden, c.canWrite));
+  await writeFile(c.profilePath, opusProfile(c.workspace, c.hidden, c.canWrite, c.readable));
   const sessionId = crypto.randomUUID();
   const r = await supervise(['/usr/bin/sandbox-exec', '-f', c.profilePath, ...opusCommand(real(found), c, sessionId)], { cwd: c.workspace, env: opusEnv(), timeoutMs: null, stdin: c.prompt });
   let j: JsonResult = {};
