@@ -407,29 +407,29 @@ hp-ask .hp-options{border-color:var(--hp-divider)}
   <h1 id="hp-title">Local orchestrator</h1>
   <ol class="hp-stages" aria-label="Stages">
     <li data-hp-stage="done">Design</li>
-    <li data-hp-stage="current" aria-current="step">Spec review</li>
-    <li data-hp-stage="next">Plan review</li>
+    <li data-hp-stage="done">Spec review</li>
+    <li data-hp-stage="current" aria-current="step">Plan review</li>
   </ol>
 </header>
 
-<section id="hp-opening"><p class="hp-decision">Claude plans, tests and reviews; a local model on your Mac writes the code. This spec decides how it stays safe and how we prove it saves Claude usage.</p>
+<section id="hp-opening"><p class="hp-decision">The plan builds the harness first, then makes Claude's three Snakes for you to rate beside GPT's, then the model test and Card Table. It also adds the Snake evaluation to the spec you approved.</p>
   <div class="hp-card hp-needs">
     <h2 class="hp-eyebrow">Needs you</h2>
     <p class="hp-review-line hp-seps"><span><b>3</b>&nbsp;decisions&nbsp;left</span><span><b>3</b>&nbsp;critic&nbsp;rounds</span><span><b>0</b>&nbsp;open&nbsp;highs</span></p>
     <ol>
-      <li><a href="#ask-sharing" data-hp-next-ask>Answer the next decision</a>, then give your verdict and Submit.</li>
-      <li>The closing audit (Sol, Terra, Gemini) raised 4 highs. All are fixed in this revision, but the review cap was reached, so the fixes weren't re-reviewed.</li>
+      <li><a href="#ask-build" data-hp-next-ask>Answer the next decision</a>, then give your verdict and Submit.</li>
+      <li>The closing audit (Sol, Terra, Gemini) raised 7 highs. All are fixed in this revision, but the review cap was reached, so the fixes weren't re-reviewed.</li>
     </ol>
   </div>
   <p class="hp-nosave">Answers can't be saved from here. Fill them in, then <a href="#hp-prompt">copy the prompt</a> at the end of the page.</p>
   <div class="hp-meta">
-    <p id="hp-updated">Updated <time datetime="2026-11-21T15:10">21&nbsp;Nov&nbsp;2026, 15:10</time></p>
-    <p class="hp-source hp-seps"><span>Mirrors <b>SPEC.md</b></span><span class="hp-nowrap">rev&nbsp;1d78f0b</span></p>
+    <p id="hp-updated">Updated <time datetime="2026-11-21T14:55">21&nbsp;Nov&nbsp;2026, 14:55</time></p>
+    <p class="hp-source hp-seps"><span>Mirrors <b>PLAN.md</b> and <b>SPEC.md</b></span><span class="hp-nowrap">rev&nbsp;6117cd7</span></p>
   </div>
   <details class="hp-details hp-howto">
     <summary>How to read this page</summary>
     <div class="hp-details-body">
-      <p class="hp-muted">Each row sums up one section of the spec; the spec stays the source. Tap a row to open its evidence and decisions. Answer the three decisions, give a verdict, then Submit.</p>
+      <p class="hp-muted">Each row sums up part of the plan; PLAN.md stays the source. Chips marked Spec are your earlier answers, now settled. Answer the three decisions, give a verdict on the plan, then Submit.</p>
     </div>
   </details>
 </section>
@@ -438,146 +438,126 @@ hp-ask .hp-options{border-color:var(--hp-divider)}
   <form id="hp-form">
     <div id="hp-tree">
 
-      <hp-claim data-claim-id="c1" data-source="§6.6">
-        <p>This project stays off the model server while CHE-1166 is scoring.</p>
-        <hp-mock frame="none" w="390" label="Why it matters" caption="Both projects share one LM Studio server and the Mac's memory.">
-          <template>
-            <div style="padding:14px 16px;display:grid;gap:10px">
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>CHE-1166</b> times and scores its Snake runs on this server.</div>
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Our requests or model loads</b> would slow or evict its model and skew its results.</div>
-              <div data-ref="rule"><b>Rule either way:</b> no global LM Studio setting changes, and no request left running when we hand the server back.</div>
-            </div>
-          </template>
-          <hp-pin ref="rule" title="Always">Applies whichever answer you pick.</hp-pin>
+      <hp-claim data-claim-id="c8" data-source="PLAN T1–T12">
+        <p>Phase 1 builds the sandboxed loop and tests it against a fake model.</p>
+        <hp-mock frame="terminal" w="470" title="phase 1 · about 2 days" label="What gets built and proven before any real run">
+          <template><span class="dim">T2 </span> fake model server: scripted fails, tampering, hangs
+<span class="dim">T4 </span> three sandbox profiles + canaries (.env inside too)
+<span class="dim">T5 </span> worktrees, clean deps, replayable diffs
+<span class="dim">T6 </span> deadlines that catch escaped processes
+<span class="dim">T7 </span> checks: manifest, sentinel, mutants
+<span class="dim">T8 </span> Claude Code worker on LM Studio, effort passed
+<span class="dim">T10</span> calibration: fake server, then <span class="g">real Inkling</span>
+<span class="dim">T12</span> usage from transcripts, subagents included</template>
         </hp-mock>
-        <hp-ask id="ask-sharing">
-          <p id="ask-sharing-q">How should this project share the model server with CHE-1166?</p>
-          <fieldset class="hp-field" aria-labelledby="ask-sharing-q">
+        <hp-ask id="ask-build">
+          <p id="ask-build-q">How should the build run?</p>
+          <fieldset class="hp-field" aria-labelledby="ask-build-q">
             <div class="hp-options">
-              <label class="hp-option"><input type="radio" name="spec:sharing" value="wait" checked> Wait until CHE-1166's scored run is done and you say so</label>
-              <label class="hp-option"><input type="radio" name="spec:sharing" value="handoff"> You hand the server over per session; CHE-1166 pauses meanwhile</label>
+              <label class="hp-option"><input type="radio" name="plan:build" value="session" checked> In this session, one task at a time</label>
+              <label class="hp-option"><input type="radio" name="plan:build" value="subagents"> Subagents for independent tasks, in parallel</label>
             </div>
           </fieldset>
-          <p class="hp-if" data-if="spec:sharing=handoff">Faster start, but you have to remember to pause CHE-1166 each time.</p>
+          <p class="hp-if" data-if="plan:build=subagents">Faster, but more to coordinate and review; most tasks build on the one before.</p>
         </hp-ask>
       </hp-claim>
 
-      <hp-claim data-claim-id="c2" data-source="§6.1">
-        <p>The local model can touch only its task's files and the model server.</p>
-        <hp-mock frame="terminal" w="470" title="phase 1 canary checks" label="What calibration must show before anything else runs">
-          <template><span class="dim">canary</span> read another repo        <span class="g">blocked</span>
-<span class="dim">canary</span> write outside task paths <span class="g">blocked</span>
-<span class="dim">canary</span> read a .env file         <span class="g">blocked</span>
-<span class="dim">canary</span> reach another local port <span class="g">blocked</span>
-<span class="dim">canary</span> reach the internet       <span class="g">blocked</span>
-<span class="dim">result</span> sandbox holds; no unsandboxed fallback</template>
-        </hp-mock>
-      </hp-claim>
-
-      <hp-claim data-claim-id="c3" data-source="§6.2">
-        <p>Only checks the local model cannot change decide whether it passed.</p>
-        <hp-mock frame="terminal" w="470" title="one attempt" label="How an attempt is graded" caption="Known limit: code built on purpose to forge a report can't be fully stopped by the harness, so Claude's diff review is the backstop.">
-          <template><span class="dim">1</span> reject diff outside writable paths
-<span class="dim">2</span> fresh checkout + trusted dependencies
-<span class="dim">3</span> apply only the worker's allowed diff
-<span class="dim">4</span> run Claude's tests in the sandbox
-<span class="dim">5</span> every expected test passed?   <span class="g">yes</span>
-<span class="dim">6</span> sentinel test failed as it should? <span class="g">yes</span>
-<span class="dim">7</span> Claude reviews the diff</template>
-        </hp-mock>
-      </hp-claim>
-
-      <hp-claim data-claim-id="c4" data-source="§3, §6.4">
-        <p>Claude takes over a task after the model's third failed attempt.</p>
-        <hp-mock frame="terminal" w="470" title="ledger" label="One task in the ledger">
-          <template><span class="dim">task 3</span> attempt 1  model fail   (2 tests red)
-<span class="dim">task 3</span> attempt 2  model fail   (lint)
-<span class="dim">task 3</span> attempt 3  <span class="g">local pass</span>
-<span class="dim">task 4</span> attempt 1  infra fail   (server error, re-run)
-<span class="dim">task 4</span> attempt 3  model fail → <b>escalated to Claude</b></template>
-        </hp-mock>
-      </hp-claim>
-
-      <hp-claim data-claim-id="c5" data-source="§6.5">
-        <p>We measure savings against Claude doing the same task alone.</p>
-        <hp-mock frame="none" w="390" label="What gets compared" caption="Shared prep (task file and tests) is reported on its own line and left out of the comparison.">
+      <hp-claim data-claim-id="c9" data-source="SPEC §12 · PLAN T13–T15">
+        <p>Claude builds three Snakes the way GPT did, then you rate them.</p>
+        <hp-mock frame="none" w="390" label="The Snake evaluation" caption="Same task, prompts and retry rule as CHE-1166. Nobody runs the games before you do.">
           <template>
             <div style="padding:14px 16px;display:grid;gap:10px">
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Hybrid:</b> Claude's reviews, corrections and any takeover code</div>
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Baseline:</b> Claude's whole implementation, plus the same review</div>
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Second guard:</b> the hybrid's total, prep included, must also be at most 80% of the baseline's</div>
-              <div data-ref="metric"><b>One number:</b> cost-weighted Claude tokens, from each session's own record</div>
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Claude only:</b> Opus 5.5 at high effort builds it</div>
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Inkling only:</b> Claude sends the task, Inkling builds it alone</div>
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Hybrid:</b> Claude plans and reviews, Inkling builds</div>
+              <div data-ref="blind"><b>You:</b> play A–C blind, rate each, then rank all six with GPT's three</div>
             </div>
           </template>
-          <hp-pin ref="metric" title="A proxy">Tokens stand in for usage-limit burn; they don't measure it directly.</hp-pin>
+          <hp-pin ref="blind" title="Blind">Before you submit, you see only labels and game links: no timings, outcomes or usage.</hp-pin>
         </hp-mock>
-        <hp-ask id="ask-baseline">
-          <p id="ask-baseline-q">What should we compare Card Table results against?</p>
-          <fieldset class="hp-field" aria-labelledby="ask-baseline-q">
+        <hp-ask id="ask-snake">
+          <p id="ask-snake-q">Add this Snake evaluation to the approved spec?</p>
+          <fieldset class="hp-field" aria-labelledby="ask-snake-q">
             <div class="hp-options">
-              <label class="hp-option"><input type="radio" name="spec:baseline" value="real" checked> A real Claude-only run of each task (costs extra usage)</label>
-              <label class="hp-option"><input type="radio" name="spec:baseline" value="estimate"> An estimate, labelled hypothetical</label>
+              <label class="hp-option"><input type="radio" name="plan:snake" value="yes" checked> Yes, as described in spec §12</label>
+              <label class="hp-option"><input type="radio" name="plan:snake" value="changes"> Yes, with changes (say which in the note)</label>
             </div>
           </fieldset>
-          <p class="hp-if" data-if="spec:baseline=estimate">Every savings number becomes a guess, and packaging needs your call.</p>
-        </hp-ask>
-        <hp-ask id="ask-bar">
-          <p>How much must the hybrid save before we package it?</p>
-          <div class="hp-field">
-            <label class="hp-field-label" for="f-bar">Hybrid at most this share of Claude-only <span class="hp-tag">Suggested: 60%</span></label>
-            <div class="hp-select-wrap">
-              <select class="hp-select" id="f-bar" name="spec:bar">
-                <option value="50">50% (saves at least half)</option>
-                <option value="60" selected>60% (saves at least 40%)</option>
-                <option value="75">75% (saves at least a quarter)</option>
-              </select>
-            </div>
-          </div>
         </hp-ask>
       </hp-claim>
 
-      <hp-claim data-claim-id="c6" data-source="§7, §8">
-        <p>Work stops after the model test if no local model is good enough.</p>
-        <hp-mock frame="none" w="390" label="The four phases">
-          <template>
-            <div style="padding:14px 16px;display:grid;gap:10px">
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>1 · Calibrate</b> (~half day): script, sandbox, whole loop. Codex CLI if Claude Code fails; stop if both fail.</div>
-              <div data-ref="gate" style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>2 · Model test</b> (~3–5 h, mostly unattended): 5 frozen tasks per installed model.</div>
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>3 · Card Table</b> (~half day): 1–2 real issues you pick.</div>
-              <div><b>4 · Package</b> as a skill only if the savings bar is met.</div>
-            </div>
-          </template>
-          <hp-pin ref="gate" title="The gate">A model needs 3 of 5 local passes, including the bug fix and the React component.</hp-pin>
+      <hp-claim data-claim-id="c10" data-source="PLAN T16–T18">
+        <p>The model test picks the best local model on five frozen tasks.</p>
+        <hp-mock frame="terminal" w="470" title="phase 2" label="Four candidates, same five tasks">
+          <template><span class="dim">models</span> Inkling 2 Mini · Qwen3.8 27B · Qwen3.6 35B-A3B · Gemma 4 E4B
+<span class="dim">tasks </span> function · bug fix · React component · refactor · tests
+<span class="dim">gate  </span> 3 of 5 local passes, incl. bug fix and React
+<span class="dim">rank  </span> passes, then fewer corrections, then speed</template>
         </hp-mock>
       </hp-claim>
 
-      <hp-claim data-claim-id="c7" aux="scope" data-source="§10">
-        <p>Not in v1: two workers at once, cloud workers, CHE-1166 changes.</p>
+      <hp-claim data-claim-id="c11" data-source="PLAN T19–T21">
+        <p>Card Table runs hybrid and Claude-only side by side before any merge.</p>
+        <hp-mock frame="none" w="390" label="Phase 3" caption="Merging into Card Table still needs your yes on the PR.">
+          <template>
+            <div style="padding:14px 16px;display:grid;gap:10px">
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>You pick</b> 1–2 Card Table issues</div>
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>Hybrid and baseline</b> start from the same commit in fresh sessions</div>
+              <div><b>Merged commit</b> passes the sandboxed checks and Card Table's own tests</div>
+            </div>
+          </template>
+        </hp-mock>
+        <hp-ask id="ask-github">
+          <p id="ask-github-q">Where should this project's code live?</p>
+          <fieldset class="hp-field" aria-labelledby="ask-github-q">
+            <div class="hp-options">
+              <label class="hp-option"><input type="radio" name="plan:github" value="private-repo" checked> A new private GitHub repo, with draft PRs</label>
+              <label class="hp-option"><input type="radio" name="plan:github" value="local"> Local git only, no PRs</label>
+            </div>
+          </fieldset>
+          <p class="hp-if" data-if="plan:github=local">No PR reviews or CI; your one-PR-per-issue rule can't apply.</p>
+        </hp-ask>
+      </hp-claim>
+
+      <hp-claim data-claim-id="c12" data-source="PLAN T22–T23">
+        <p>Packaging happens only if Card Table merges and savings clear both bars.</p>
+        <hp-mock frame="none" w="390" label="Phase 4">
+          <template>
+            <div style="padding:14px 16px;display:grid;gap:10px">
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>After dispatch:</b> hybrid at most 60% of Claude-only</div>
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>In total:</b> hybrid at most 80%, shared prep included</div>
+              <div><b>Unknown usage</b> makes it inconclusive, and you decide</div>
+            </div>
+          </template>
+        </hp-mock>
+      </hp-claim>
+
+      <hp-claim data-claim-id="c13" aux="scope" data-source="SPEC §10">
+        <p>Not in v1: two workers at once, cloud workers, changes to CHE-1166.</p>
         <hp-mock frame="none" w="390" label="What stays out">
           <template>
             <div style="padding:14px 16px;display:grid;gap:10px">
               <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>One worker at a time</b> until memory headroom is measured.</div>
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>No cloud models</b> as workers.</div>
-              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>CHE-1166</b> is not changed or re-run.</div>
-              <div><b>Nothing</b> is published remotely.</div>
+              <div style="padding-bottom:10px;border-bottom:1px solid #d9d8d3"><b>CHE-1166</b> is only read, never changed.</div>
+              <div><b>The games</b> stay on your Mac; only the rating page is online.</div>
             </div>
           </template>
         </hp-mock>
       </hp-claim>
 
       <div id="hp-verdict">
-        <h2>Your verdict on the spec</h2>
+        <h2>Your verdict on the plan</h2>
         <p class="hp-verdict-history" artifact-local hidden></p>
         <fieldset class="hp-field">
-          <legend>Spec review, rev 1d78f0b</legend>
+          <legend>Plan review, rev 6117cd7</legend>
           <div class="hp-options">
-            <label class="hp-option"><input type="radio" name="spec:verdict" value="approve"> Approve</label>
-            <label class="hp-option"><input type="radio" name="spec:verdict" value="request-changes"> Request changes</label>
+            <label class="hp-option"><input type="radio" name="plan:verdict" value="approve"> Approve</label>
+            <label class="hp-option"><input type="radio" name="plan:verdict" value="request-changes"> Request changes</label>
           </div>
         </fieldset>
         <div class="hp-field">
           <label class="hp-field-label" for="f-verdict-note">Note (optional)</label>
-          <textarea class="hp-textarea" id="f-verdict-note" name="spec:verdict-note" rows="3"></textarea>
+          <textarea class="hp-textarea" id="f-verdict-note" name="plan:verdict-note" rows="3"></textarea>
         </div>
         <p class="hp-muted hp-ui">Approving here is information for the session, not permission to build.</p>
       </div>
@@ -3010,23 +2990,134 @@ if (typeof module !== "undefined" && module.exports) {
 }
 /* html-pages:inline claims.js END */</script>
 <script id="hp-config" type="application/json">{
-  "kind": "feature",
-  "title": "Local orchestrator",
-  "questionsRev": "1",
-  "stage": "spec",
-  "stages": ["design", "spec", "plan", "record"],
-  "sourcePath": "SPEC.md",
-  "sourceRev": "1d78f0b",
-  "fields": ["spec:sharing", "spec:baseline", "spec:bar", "spec:verdict", "spec:verdict-note"],
-  "labels": {"spec:sharing": "How should this project share the model server with CHE-1166?", "spec:baseline": "What should we compare Card Table results against?", "spec:bar": "How much must the hybrid save before we package it?", "spec:verdict": "Verdict", "spec:verdict-note": "Verdict note"},
-  "defaults": {"spec:sharing": "wait", "spec:baseline": "real", "spec:bar": "60", "spec:verdict": null, "spec:verdict-note": ""},
-  "options": {"spec:sharing": {"wait": "Wait until CHE-1166's scored run is done and you say so", "handoff": "You hand the server over per session; CHE-1166 pauses meanwhile"}, "spec:baseline": {"real": "A real Claude-only run of each task (costs extra usage)", "estimate": "An estimate, labelled hypothetical"}, "spec:bar": {"50": "50% (saves at least half)", "60": "60% (saves at least 40%)", "75": "75% (saves at least a quarter)"}, "spec:verdict": {"approve": "Approve", "request-changes": "Request changes"}},
-  "introduced": ["spec:sharing", "spec:baseline", "spec:bar", "spec:verdict", "spec:verdict-note"],
-  "settled": [],
-  "retired": {},
-  "targets": {"claims": ["c1","c2","c3","c4","c5","c6","c7"], "excerpts": [], "mocks": ["c1:rule","c5:metric","c6:gate"]},
-  "nextClaimId": 8, "retiredClaims": [],
-  "nextExcerptId": 1, "retiredExcerpts": []
+ "kind": "feature",
+ "title": "Local orchestrator",
+ "questionsRev": "2",
+ "stage": "plan",
+ "stages": [
+  "design",
+  "spec",
+  "plan",
+  "record"
+ ],
+ "sourcePath": "PLAN.md",
+ "sourceRev": "6117cd7",
+ "fields": [
+  "plan:build",
+  "plan:snake",
+  "plan:github",
+  "plan:verdict",
+  "plan:verdict-note"
+ ],
+ "labels": {
+  "plan:build": "How should the build run?",
+  "plan:snake": "Add this Snake evaluation to the approved spec?",
+  "plan:github": "Where should this project's code live?",
+  "plan:verdict": "Verdict",
+  "plan:verdict-note": "Verdict note"
+ },
+ "defaults": {
+  "plan:build": "session",
+  "plan:snake": "yes",
+  "plan:github": "private-repo",
+  "plan:verdict": null,
+  "plan:verdict-note": ""
+ },
+ "options": {
+  "plan:build": {
+   "session": "In this session, one task at a time",
+   "subagents": "Subagents for independent tasks, in parallel"
+  },
+  "plan:snake": {
+   "yes": "Yes, as described in spec §12",
+   "changes": "Yes, with changes (say which in the note)"
+  },
+  "plan:github": {
+   "private-repo": "A new private GitHub repo, with draft PRs",
+   "local": "Local git only, no PRs"
+  },
+  "plan:verdict": {
+   "approve": "Approve",
+   "request-changes": "Request changes"
+  }
+ },
+ "introduced": [
+  "plan:build",
+  "plan:snake",
+  "plan:github",
+  "plan:verdict",
+  "plan:verdict-note"
+ ],
+ "settled": [
+  {
+   "id": "spec:sharing",
+   "claim": "c8",
+   "stage": "spec",
+   "question": "How should this project share the model server with CHE-1166?",
+   "labels": {
+    "wait": "Wait until CHE-1166's scored run is done and you say so",
+    "handoff": "You hand the server over per session; CHE-1166 pauses meanwhile"
+   }
+  },
+  {
+   "id": "spec:baseline",
+   "claim": "c11",
+   "stage": "spec",
+   "question": "What should we compare Card Table results against?",
+   "labels": {
+    "real": "A real Claude-only run of each task (costs extra usage)",
+    "estimate": "An estimate, labelled hypothetical"
+   }
+  },
+  {
+   "id": "spec:bar",
+   "claim": "c12",
+   "stage": "spec",
+   "question": "How much must the hybrid save before we package it?",
+   "labels": {
+    "50": "50% (saves at least half)",
+    "60": "60% (saves at least 40%)",
+    "75": "75% (saves at least a quarter)"
+   }
+  }
+ ],
+ "retired": {
+  "c1": "This project stays off the model server while CHE-1166 is scoring.",
+  "c2": "The local model can touch only its task's files and the model server.",
+  "c3": "Only checks the local model cannot change decide whether it passed.",
+  "c4": "Claude takes over a task after the model's third failed attempt.",
+  "c5": "We measure savings against Claude doing the same task alone.",
+  "c6": "Work stops after the model test if no local model is good enough.",
+  "c7": "Not in v1: two workers at once, cloud workers, CHE-1166 changes.",
+  "spec:verdict": "Verdict",
+  "spec:verdict-note": "Verdict note"
+ },
+ "targets": {
+  "claims": [
+   "c8",
+   "c9",
+   "c10",
+   "c11",
+   "c12",
+   "c13"
+  ],
+  "excerpts": [],
+  "mocks": [
+   "c9:blind"
+  ]
+ },
+ "nextClaimId": 14,
+ "retiredClaims": [
+  "c1",
+  "c2",
+  "c3",
+  "c4",
+  "c5",
+  "c6",
+  "c7"
+ ],
+ "nextExcerptId": 1,
+ "retiredExcerpts": []
 }</script>
 <script id="hp-page-js">/* html-pages:inline page.js BEGIN */
 // skills/html-pages/assets/js/page.js
