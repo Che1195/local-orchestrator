@@ -2,12 +2,12 @@
 
 Spec: SPEC.md rev 6 (rev 5 approved by Che on November 21, 2026; rev 6 adds the Snake evaluation and awaits his re-approval). The spec wins where they differ.
 
-Status: draft rev 5, revised after plan review rounds 1 to 3 and the closing audit (Sol, Terra, Gemini 4 Neon high); the review cap is reached, so rev 5's fixes were not re-reviewed. Earlier: (gpt-6.1-sol and gpt-6.1-terra, high) and Che's Snake request. Nothing built yet.
+Status: rev 5, approved by Che in chat on November 21, 2026 (on rev 6117cd7). Decisions: build in one session, one task at a time; Snake evaluation as in spec §12; public GitHub repo `Che1195/local-orchestrator` with draft PRs. Reviewed in 3 rounds (gpt-6.1-sol and gpt-6.1-terra, high) and a closing audit (Sol, Terra, Gemini 4 Neon high); rev 5's audit fixes were not re-reviewed (cap reached).
 
 ## Ground rules
 
 - Bun 1.4.3 + TypeScript, no `any`. Checks for this repo: `bun run typecheck`, `bun run lint`, `bun test`.
-- Branch `che-1170-local-orchestrator`. The repo is local; a PR needs a GitHub repo (decision on the page).
+- Branch `che-1170-local-orchestrator` in the public repo `Che1195/local-orchestrator`; one draft PR for CHE-1170, merged only after every check passes and with Che's yes.
 - **Model-server gate: lifted** by Che in chat on November 21 (CHE-1166 is done). Tasks marked **[gate]** use the real LM Studio server and may run once their build steps are done; tests still use the fake model server (T2).
 - Every task ends with its named check run; results go to Linear at each milestone.
 

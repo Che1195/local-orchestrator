@@ -2,7 +2,7 @@
 
 Issue: https://linear.app/chedev/issue/CHE-1170/claude-orchestrates-local-models-for-real-coding-work
 
-Status: rev 6 (draft). Rev 5 was approved by Che on November 21, 2026; rev 6 adds the Snake evaluation Che asked for afterwards (§3, §7 phase 1b, §12) and needs his re-approval. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and the closing audit (Sol, Terra, Gemini 4 Neon high). The review cap is reached; rev 5's fixes to the audit's findings were not re-reviewed. Nothing built yet.
+Status: rev 6, approved by Che on November 21, 2026 (rev 5 approved earlier; rev 6 adds the Snake evaluation, approved with the plan). Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and the closing audit (Sol, Terra, Gemini 4 Neon high). The review cap is reached; rev 5's fixes to the audit's findings were not re-reviewed. Nothing built yet.
 
 ## 1. Goal
 
@@ -35,6 +35,12 @@ Che, November 21, in chat, after approval (needs re-approval on the page):
 - Model-server gate lifted: Che said in chat on November 21 that CHE-1166 is done with the model server. This project may now send requests and load or unload models, still without changing LM Studio's global settings (§6.6).
 - Snake evaluation worker program: Claude's default (headless Claude Code, Codex CLI only as the fallback), not CHE-1166's Codex CLI; the difference stays listed in §12.5.
 - Before Card Table, add a Snake evaluation that mirrors CHE-1166's with Claude as the frontier model: the same Snake built three ways, which with GPT's three makes six to compare (§12). Che plays and judges every finished game; Claude does everything up to "ready" and keeps the stats.
+
+Che, November 21, approving the plan in chat (rev 6117cd7), which also approves this rev 6:
+
+- Snake evaluation added as written in §12.
+- Build runs in one Claude Code session, one task at a time.
+- Code lives in a new public GitHub repo, `Che1195/local-orchestrator`, with draft PRs. Che chose public: this is not a business. Run results, transcripts and private folders stay out of git.
 
 ## 4. Terms
 
