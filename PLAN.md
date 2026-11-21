@@ -1,144 +1,187 @@
 # CHE-1170 · Local orchestrator · Implementation plan
 
-Spec: SPEC.md (rev 5, approved by Che on November 21, 2026, on rev 1d78f0b). This plan is the source of truth for the build; the spec wins where they differ.
+Spec: SPEC.md rev 6 (rev 5 approved by Che on November 21, 2026; rev 6 adds the arcade evaluation and awaits his re-approval). The spec wins where they differ.
 
-Status: draft rev 1 for review. Nothing built yet.
+Status: draft rev 2, revised after plan review round 1 (gpt-6.1-sol and gpt-6.1-terra, high) and Che's arcade request. Nothing built yet.
 
 ## Ground rules
 
 - Bun 1.4.3 + TypeScript, no `any`. Checks for this repo: `bun run typecheck`, `bun run lint`, `bun test`.
-- Branch `che-1170-local-orchestrator`; one commit per task at least; a PR only if Che picks a GitHub repo (decision on the page).
-- **Model-server gate:** no task sends a request to LM Studio, or loads or unloads a model, until CHE-1166's scored run is finished and Che says so in chat. Tasks marked **[gate]** wait for that; everything else uses a fake model server (T2) and can be built now.
-- Every task ends with its named check run and its result recorded in Linear at each milestone.
+- Branch `che-1170-local-orchestrator`. The repo is local; a PR needs a GitHub repo (decision on the page).
+- **Model-server gate:** no task sends a request to LM Studio, or loads or unloads a model, until CHE-1166's scored run is finished and Che says so in chat. Tasks marked **[gate]** wait; everything else uses the fake model server (T2) and can be built now.
+- Every task ends with its named check run; results go to Linear at each milestone.
 
 ## Key idea: a fake model server
 
-Most of the loop can be built and tested without LM Studio. T2 builds a tiny local server that speaks the Anthropic `/v1/messages` format and plays back scripted replies, including tool calls. Scripted workers can then edit files, fail, tamper with checks or hang on purpose, so the sandbox, checks, tamper cases and deadlines are all tested before any real model runs.
+T2 builds a tiny local server that speaks the Anthropic `/v1/messages` format and plays back scripted replies, tool calls included. Scripted workers edit files, fail, tamper or hang on purpose, so the sandbox, checks, tamper cases and deadlines are tested before any real model runs.
+
+## Run configuration
+
+One immutable JSON file per run, `runs/<run id>/config.json`, written before the first attempt and hashed into every ledger record: model id and exact file path, quantization, backend, context length, reasoning effort, sampling settings (LM Studio defaults, read back and recorded), endpoint URL and port, LM Studio version, worker program and version, Claude model and effort. The worker adapter takes all of it from this file; nothing comes from ambient settings. Models are loaded per run with `lms load <model> --context-length <n>` and unloaded with `lms unload` [gate]; LM Studio's global settings are never changed.
 
 ## Phase 1 · Plumbing and calibration
 
 ### T1 · Repo scaffold (~20 min)
-- Files: `package.json` (scripts `typecheck`, `lint`, `test`), `tsconfig.json` (strict), `eslint.config.js` (no `any`), `src/`, `tests/`, `.gitignore` (`runs/`, `html-pages/.private/`).
+- `package.json` (scripts `typecheck`, `lint`, `test`), strict `tsconfig.json`, `eslint.config.js` (no `any`), `src/`, `tests/`, `.gitignore` (`runs/`, `results/`, `html-pages/.private/`).
 - Done when: the three checks pass on an empty `src/index.ts`.
 
 ### T2 · Fake model server (~45 min)
-- `tests/support/fake-model.ts`: a Bun HTTP server on a random local port implementing `POST /v1/messages` (streaming and non-streaming) and `GET /v1/models`. It plays a scripted list of replies: text, `tool_use` blocks, a server error, a hang, or a slow stream. It records every request it receives and whether the client disconnected.
-- Tests: a scripted reply round-trips; a hang can be detected as a disconnect when the client is killed.
+- `tests/support/fake-model.ts`: a Bun server on a random local port with `POST /v1/messages` (streaming and not) and `GET /v1/models`, playing scripted replies: text, `tool_use`, a server error, a hang, a slow stream. It logs every request and whether the client disconnected mid-request.
+- Tests: scripted replies round-trip; a killed client shows as a disconnect.
 
-### T3 · Task file and ledger (~45 min)
-- `src/task.ts`: the task file format (JSON), validated with hand-written TypeScript guards:
-  `id`, `repo`, `baseCommit`, `taskType` (`behavior` | `bugfix` | `refactor` | `tests`), `writablePaths[]`, `instructions` (markdown), `checks[]` (name + command, run in the check checkout), `testReport` (path to the JUnit report), `protectedTestGlobs[]`, `sentinelTest` (name), and for `refactor` a `structuralCheck` command, for `tests` a `mutantsDir` and `referenceTestsDir` outside the repo.
-- `src/ledger.ts`: append-only JSONL. `start` and `end` records per attempt with task id, attempt number, model settings, status (`local-pass` | `model-fail` | `infra-fail` | `blocked` | `forged` | `escalated`), elapsed time, local tokens, and the reasons. A `start` with no `end` reads back as `incomplete`.
-- Tests: bad task files are refused with a reason; ledger round-trip; an incomplete attempt is detected.
+### T3 · Task file, run states and ledger (~1 h)
+- `src/task.ts`: the task file (JSON) with hand-written guards: `id`, `repo`, `baseCommit`, `taskType` (`behavior` | `bugfix` | `refactor` | `tests` | `artifact`), `writablePaths[]`, `instructions`, `checks[]` (name + command), `testReport` (JUnit path), `testManifest` (path outside the repo, T7), `sentinelTest` (name), and per type: `structuralCheck` for `refactor`; `mutantsDir` and `referenceTestsDir` outside the repo for `tests`; `artifactFile` for `artifact` (the arcade games, no checks).
+- Attempt states. `local-worker` never decides a local pass by itself:
+  - The script ends an attempt as `checks-passed`, `model-fail`, `infra-fail`, `blocked` or `forged` (for `artifact` tasks: `artifact-present` or `model-fail`).
+  - Claude then records a review with `local-worker review --task <id> --attempt <n> --accept|--reject --reason <text>`.
+  - Derived: `local-pass` = `checks-passed` + accepted. A rejection or failure leads to a correction while attempts remain; after the third failed attempt Claude writes the piece and records `escalated` with `local-worker escalate`.
+  - An `infra-fail` re-run doesn't use up an attempt; at most 2 re-runs per task, then `blocked`.
+- `src/ledger.ts`: append-only JSONL with `start`, `end`, `review` and `escalate` records, each carrying the run configuration hash. A `start` with no `end` reads back as `incomplete`.
+- Tests: bad task files refused with a reason; every state transition, including that `checks-passed` alone never counts as `local-pass`; incomplete attempts detected.
 
-### T4 · Sandbox profiles and canaries (~1.5 h)
-- `src/sandbox.ts` builds two Seatbelt profiles from parameters and runs a command under `sandbox-exec -f <profile>`:
-  - Worker: write to writable paths and the per-task home/config/temp; read the worktree, the worker program's install, system paths; network only to `127.0.0.1:<model port>`.
-  - Check: read-only check checkout, write only a temp/report folder, no network.
-- `src/env.ts`: the scrubbed environment (allowlist of variables; fresh `HOME`, `TMPDIR`, `CLAUDE_CONFIG_DIR`).
-- `tests/sandbox.test.ts` runs the five canaries for real under each profile: read a file in another repo, write outside the allowed paths, read a canary `.env`, connect to another local port (a listener the test starts), and connect to the internet. Plus: the check profile can't reach the model port. Every one must be blocked; the allowed operations must still work.
-- Risk: `sandbox-exec` is deprecated by Apple but present on this macOS. If a profile rule can't express a needed limit, stop and report; no weaker fallback (spec §6.1).
+### T4 · Sandbox profiles and canaries (~2 h)
+- `src/sandbox.ts` builds three Seatbelt profiles and runs commands under `sandbox-exec -f <profile>`:
+  - **Worker:** write the writable paths plus the per-task home, config and temp folders; read the worktree, the worker program's install and system paths; network only to `127.0.0.1:<model port>`. Secret rules come last and override reads: deny reading any file named `.env` or `.env.*`, `*.pem`, `*.key`, and anything under `~/.ssh`, `~/Library/Keychains` and other repos. Seatbelt matches resolved paths, so a symlink to a secret is denied too; T4's tests prove it.
+  - **Check:** read-only check checkout and the dependency copy, write only a temp and report folder, no network.
+  - **Service check:** as Check, plus listening and connecting on the specific loopback ports the task declares, for browser or service checks. If the profile can't be set up, the check is `blocked`.
+- `src/env.ts`: the scrubbed environment (allowlisted variables; fresh `HOME`, `TMPDIR`, `CLAUDE_CONFIG_DIR`).
+- `tests/sandbox.test.ts` runs every canary for real under each profile: read a file in another repo; write outside the allowed paths; read a `.env` placed **inside** the worktree; read a symlink in the worktree that points at a secret; connect to another local port (a listener the test starts); connect to the internet; and, under Check, connect to the model port. All must be blocked, and the allowed operations must still work.
+- If a needed limit can't be expressed in Seatbelt, stop and report; no weaker fallback (spec §6.1).
 
-### T5 · Worktrees, diffs and dependencies (~1 h)
+### T5 · Worktrees, diffs and dependencies (~1.5 h)
 - `src/workspace.ts`:
   - Refuse when the repo has uncommitted changes in files the task touches.
-  - Prepare the clean dependency folder once per task: `bun install --frozen-lockfile` into a cache folder on the host (10-minute limit).
-  - Create a fresh worktree at the base commit for each attempt; for a correction, apply the previous attempt's diff if it passed validation.
-  - Capture the attempt's diff, untracked files included (`git add -N` then `git diff`).
-  - Validate: every path inside `writablePaths`, no symlinks (mode `120000`), no deletions of protected files.
-  - Build the check checkout: a new worktree at the base commit, a copy-on-write clone of the dependency folder (`cp -c`), then the validated diff.
-  - Clean up worktrees with `git worktree remove` (never `--force`) after evidence is saved; never touch worktrees this tool didn't create.
-- Tests on a throwaway fixture repo: path escape rejected; symlink rejected; untracked file captured; a changed `node_modules` file in the worker worktree does not reach the check checkout.
+  - **Dependencies, once per task:** a throwaway clone at the base commit in a temp folder, `bun install --frozen-lockfile --ignore-scripts` there (10-minute limit), then verify that no symlink in `node_modules` points outside the dependency folder or at the repo. Save the folder as the clean dependency copy.
+  - **Attempt worktree:** a fresh worktree at the base commit; for a correction, apply the previous attempt's validated diff.
+  - **Capture:** list every change with `git status --porcelain=v2 --untracked-files=all --ignored` (tracked, staged, untracked and ignored), save the diff of writable paths plus a tar of every changed file as evidence.
+  - **Validate:** every changed path inside `writablePaths`; no symlinks (mode `120000`); no protected file touched. Ignored files outside the writable paths are evidence of an attempted escape and fail the attempt.
+  - **Check checkout:** a new worktree at the base commit, a copy-on-write clone of the clean dependency copy (`cp -c`), then the validated diff.
+  - **Cleanup:** after evidence is saved, `git checkout -- . && git clean -fdx` inside tool-owned worktrees, then `git worktree remove` (never `--force`). Worktrees this tool didn't create are never touched.
+- Tests on a throwaway fixture repo, including Card Table's layout copied as a fixture: path escape rejected; symlink rejected; untracked and ignored files captured; a tampered `node_modules` file in the worker worktree doesn't reach the check checkout; cleanup leaves no worktree behind.
 
-### T6 · Process supervisor (~45 min)
-- `src/supervise.ts`: start a command in its own process group, enforce a deadline, kill the whole group (TERM, then KILL after 5 s), and report whether output was still arriving at the deadline.
-- Tests: a child that spawns grandchildren is fully killed; a hung child is killed at the deadline.
+### T6 · Process supervisor and cancellation (~1 h)
+- `src/supervise.ts`: start a command in a new process group and record every descendant's pid as it appears (polling `ps -o pid,pgid,ppid`); at the deadline send TERM, then KILL after 5 s, to the group and to any recorded descendant that moved to another group. Report whether output was still arriving at the deadline.
+- Deadlines (spec §6.3): 20 minutes for the worker; 10 minutes for all check runs of an attempt together, mutant runs included. Arcade (`artifact`) tasks have no deadline (spec §12.2).
+- Cancellation evidence: the worker's HTTP connection closing is the cancel signal. Proof that the server stopped generating comes from the server: the fake server's disconnect log now, and LM Studio's request log at verbosity 3 (`lms log stream`) [gate], which must show the request ending within 10 s of the kill. No evidence means the calibration step is `blocked`.
+- Tests: a child that spawns grandchildren in a new group is fully killed; a hung child is killed at the deadline; the fake server records the disconnect.
 
-### T7 · Check runner (~1.5 h)
-- `src/checks.ts`: run the task's checks in the check checkout under the check profile with the 10-minute deadline, then grade:
-  - Parse the JUnit report (`bun test --reporter=junit --reporter-outfile=<report>`).
-  - List expected tests from the protected test files before the run.
-  - Clean run = every expected test passed, the sentinel failed, nothing else failed or skipped, no suite error, and exit code is bun's normal test-failure code (not 0, not a signal).
+### T7 · Check runner (~2 h)
+- **Test manifest:** during task preparation (trusted, before dispatch), run the protected tests on Claude's reference solution with the JUnit reporter and save every test's identity (file path + full `describe > test` name) to `testManifest`, outside the repo. Supported forms: `test`/`it` inside `describe`, no tests generated at runtime from data. The grader never discovers tests from candidate code.
+- `src/checks.ts` runs the task's checks in the check checkout under the Check profile and grades by run kind:
+  - **Acceptance run** (behavior, bugfix, refactor): clean = every manifest test passed, the sentinel (in its own protected file) failed, nothing else failed or skipped, no suite error, exit code is bun's normal test-failure code (not 0, not a signal). Refactor also needs its structural check to pass.
+  - **Tests task, real code:** at least one worker test runs, every worker test passes, the sentinel fails, no crash.
+  - **Tests task, each mutant:** sentinel fails, no crash or syntax error, and at least one worker test fails; the sentinel never counts as catching a mutant. Pass = at least 4 of 5 mutants caught.
+  - **Reference validation (preparation):** Claude's reference tests fail on every mutant; an empty worker test folder catches none.
   - Sentinel passed or missing → `forged`.
-  - Task-type rules: `refactor` also runs the structural check; `tests` runs the worker's tests against the real code and each mutant, as in spec §6.2.
-  - Negative control: run once on the base commit before dispatch; it must fail in the way the task type requires, or the task is refused.
-- Tests with fixture repos: clean pass; one test failing; one skipped; zero tests; a source file that calls `process.exit(0)` at import (must fail); a source file that writes a correctly shaped fake report (must be marked as relying on review: see T10); a hung test killed at the deadline; mutant grading with 4 of 5 and 3 of 5 caught.
+  - **Negative control:** run once on the base commit before dispatch; it must fail as the task type requires (spec §6.2), or the task is refused.
+- Tests with fixture repos: clean pass; one failing; one skipped; zero tests; a source file calling `process.exit(0)` at import; a source file writing a correctly shaped fake report (expected: passes the harness, which is why Claude's review exists; recorded so); a hung test killed at the deadline; mutant grading at 4 of 5 and 3 of 5.
 
 ### T8 · Claude Code worker adapter (~1.5 h)
-- `src/workers/claude-code.ts`: build the headless command:
+- `src/workers/claude-code.ts` builds the headless command from the run configuration:
   `claude -p --model <local model id> --output-format stream-json --verbose --strict-mcp-config --setting-sources "" --permission-mode bypassPermissions --allowedTools Read,Edit,Write,Glob,Grep,Bash`
-  with `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`, a dummy `ANTHROPIC_AUTH_TOKEN`, and the scrubbed environment from T4, all inside the worker profile. Permissions are bypassed inside the worker program because the Seatbelt profile is the real boundary.
-- Parse the stream for completion, errors and local token counts.
-- Prompt: the task file's instructions plus, for a correction, Claude's correction text, plus the rules (work only in the writable paths, no network, stop when done).
-- Exact flags are confirmed against `claude --help` 2.1.329 during the task; anything that differs is recorded in the plan.
-- Tests against the fake server: a scripted worker reads a file, edits it, and finishes; a scripted server error is classified `infra-fail`; a scripted hang hits the deadline as `model-fail`.
+  with `ANTHROPIC_BASE_URL`, a dummy `ANTHROPIC_AUTH_TOKEN`, and the scrubbed environment, inside the Worker profile. Permissions are bypassed inside the worker program because Seatbelt is the boundary. For `artifact` tasks, `Bash` is left out.
+- Each flag is checked against `claude --help` (2.1.329) while building; differences are recorded here.
+- Parse the stream for completion, errors and local token counts. Prompt = task instructions + correction text (if any) + the boundary rules.
+- Tests against the fake server: scripted read → edit → finish; scripted server error → `infra-fail`; scripted hang → deadline → `model-fail`.
 
 ### T9 · `local-worker` command (~1 h)
-- `src/cli.ts`: `local-worker run --task <file> --attempt <n> [--correction <file> --previous-diff <file>]` runs T5 → T8 under T6 → T7 and prints one JSON result (status, diff, check output, elapsed time, local tokens), writing ledger records at start and end.
-- `local-worker negative-control --task <file>` runs the base-commit control.
-- Infra failures re-run at most twice per task (spec §4).
-- Done when: an end-to-end run against the fake server passes on a fixture task, with a scripted first-attempt failure and a passing correction.
+- `src/cli.ts`:
+  - `run --config <file> --task <file> --attempt <n> [--correction <file> --previous-diff <file>]`
+  - `negative-control --task <file>`
+  - `review` and `escalate` (T3)
+  - Prints one JSON result per call and writes ledger records.
+- Done when: an end-to-end run on the fake server passes on a fixture task: scripted first-attempt failure, Claude's rejection recorded, correction, `checks-passed`, acceptance recorded, `local-pass` derived.
 
-### T10 · Calibration suite (~1 h build; the real run is [gate])
+### T10 · Calibration suite (~1 h build; real run [gate])
 - `calibration/` holds one tiny task and a script that runs:
-  1. The whole loop: read, edit, checks fail, correction, checks pass.
-  2. The five canaries from inside a real worker session (the worker is told to try each).
-  3. Three tamper cases (spec §6.2): edit a test helper, exit the test process early, write a fake report. The first two must be caught by the harness; for the third, the result records whether the harness caught it or only Claude's review did.
-  4. Cancellation: a worker stopped at its deadline leaves no process and no in-flight model request (checked on LM Studio with `lms ps` and its server log).
+  1. The whole loop: read, edit, checks fail, correction, checks pass, review accepted.
+  2. Every canary from T4, attempted by a real worker session told to try each.
+  3. Four tamper cases: edit a test helper, edit a file in `node_modules`, exit the test process early, write a correctly shaped fake report. The first three must be caught by the harness; for the fake report, the result records whether the harness or only Claude's review caught it.
+  4. Cancellation with server evidence (T6).
 - Against the fake server: built and run now.
-- Against LM Studio with Inkling 2 Mini: **[gate]**. If headless Claude Code fails it, build T11 and rerun.
-- Done when: every step passes on the real server and the results are saved in `results/calibration-<date>/`.
+- Against LM Studio with Inkling 2 Mini: [gate]. If headless Claude Code fails it, do T11 and rerun.
+- Done when: every step passes on the real server; results saved in `results/calibration-<date>/`.
 
 ### T11 · Codex CLI fallback (only if T10 fails with Claude Code; ~1.5 h)
-- `src/workers/codex.ts` with the same contract, pointed at LM Studio's OpenAI-compatible endpoint. Rerun T10. If both fail, stop and report (spec §7).
+- `src/workers/codex.ts`, same contract, pointed at LM Studio's OpenAI-compatible endpoint. Rerun T10. If both fail, stop and report.
 
-### T12 · Usage accounting (~1 h)
-- `src/usage.ts`: read a Claude Code session transcript (JSONL) by session id and sum input, cache-write, cache-read and output tokens for every assistant call, failed calls included. Cost-weighted total = input + 1.25 × cache writes + 0.1 × cache reads + 5 × output. Missing fields are `unknown`, never 0.
-- Tests on small fixture transcripts, including one with a missing usage field.
+### T12 · Usage accounting (~1.5 h)
+- First capture real transcripts from Claude Code 2.1.329 (a short headless session, and one interrupted mid-response) as fixtures, and record the schema found.
+- `src/usage.ts`: read a session transcript by session id; group assistant records by API message id and count each response once, using the final record's usage (streamed placeholder counts are ignored); include failed and interrupted calls when their usage is recorded. Cost-weighted total = input + 1.25 × cache writes + 0.1 × cache reads + 5 × output.
+- Any call with unrecoverable usage makes the session total `unknown`; an `unknown` on either side makes a packaging ratio `inconclusive`.
+- Tests on the captured fixtures: repeated message ids counted once; a missing usage field propagates as `unknown`.
+
+## Phase 1b · Arcade evaluation (spec §12)
+
+### T13 · Arcade contracts and runner (~2 h)
+- `arcade/snake/TASK.md`: copied word for word from CHE-1166's `snake-starter/TASK.md`, hash recorded and compared with CHE-1166's file.
+- `arcade/maze/TASK.md`: an original maze-chase contract written in the same form and detail (one self-contained HTML file, canvas maze, dots, chasers, power-ups, score and best score, ready state, pause, keyboard and touch controls, phone layout, guarded localStorage, and the same file-writing and no-testing rules). Frozen and hashed before any run.
+- `src/arcade.ts`, a port of CHE-1166's Snake protocol to this harness:
+  - `prepare <run id>`: for each game, three empty workspaces; random arm order; random labels for the six games; a manifest with hashes, run configuration and limitations.
+  - `run <run id>`: for each game and arm in order:
+    - Claude only: a new standalone headless session `claude -p --model claude-opus-5-5 --effort high --session-id <uuid>` with `--tools Read,Write,Edit` only, `--strict-mcp-config`, `--setting-sources ""`, in the workspace. New attempt only if the file is missing or empty.
+    - Inkling only: `local-worker run` with an `artifact` task in the workspace. New attempt only if the file is missing or empty.
+    - Hybrid: a new standalone Claude session (same settings, read-only tools) writes one assignment without code; Inkling builds; a new Claude review session reads the file and answers accept or a scoped correction, in a fixed JSON shape; up to 3 attempts.
+    - After every attempt: scope check (only the game file changed), file present and non-empty, hash and size saved.
+  - Every Claude session id and every Inkling request is logged for T12. Elapsed time is measured per arm, with no cutoff.
+  - `publish <run id>`: copy the six games to `~/projects/local-ai-output/<run id>/` as `A.html` to `F.html` with an index page. The label-to-arm mapping stays in `results/<run id>/private/`.
+- Tests on the fake server: a full dry run with scripted Inkling and stubbed Claude sessions produces six labelled files, a manifest and a ledger; a scope violation stops that arm.
+
+### T14 · Run the arcade evaluation [gate] (~half day, mostly unattended)
+- Load Inkling 2 Mini at 131,072 context (run configuration), run all six arms in the manifest's order, unload.
+- Done when: six games are ready (or recorded as failed) in the output folder and every arm's stats are saved.
+
+### T15 · Che's blind review page and report (~1 h, then Che's play time)
+- An html-pages choice page listing games A to F with a link to the output folder: per game, works (fully, partly, not at all), score 1 to 5, and notes. No arm or model names on the page.
+- After Che submits: reveal the mapping and publish the report: per game, Che's rating beside elapsed time, attempts, Claude tokens (raw and cost-weighted), Inkling tokens and the hybrid review notes; and CHE-1166's Snake stats beside the Snake rows, read-only.
 
 ## Phase 2 · Model test
 
-### T13 · Benchmark tasks (~2 h)
-- A sandbox repo `bench/` (Bun + TypeScript + React, its own git history) with five frozen tasks, each with a base commit, task file, protected tests, sentinel test and negative control: a pure function, a bug fix, a React component (tested with `@testing-library/react` under `happy-dom`), a refactor with a structural check, and a test-writing task with 5 mutants and reference tests kept outside the repo.
-- Done when: every negative control fails as required, and a reference solution for each task passes (the solutions are kept outside the worker's view).
+### T16 · Benchmark tasks (~2 h)
+- A sandbox repo `bench/` (Bun + TypeScript + React) with five frozen tasks, each with base commit, task file, protected tests, sentinel, test manifest and negative control: a pure function, a bug fix, a React component (`@testing-library/react` under `happy-dom`), a refactor with a structural check, and a test-writing task with 5 mutants and reference tests outside the repo.
+- Also frozen before T17: `bench/prompts/` (the exact worker prompt template) and `bench/corrections.md` (the correction rules: problem and failing output only, never code; same for every model).
+- Done when: every negative control fails as required and a reference solution for each task passes.
 
-### T14 · Run the model test **[gate]** (~3–5 h, mostly unattended)
-- Freeze `bench/candidates.json` first: Inkling 2 Mini Q4_K_M, Qwen3.8 27B (the installed GGUF and MLX builds count as one candidate each only if both fit; otherwise the GGUF), Qwen3.6 35B-A3B 4-bit, Gemma 4 E4B 4-bit, each with exact file, context length, and default sampling and reasoning settings recorded.
-- For each model: load it, run the 5 tasks with up to 3 attempts each, unload it. I write corrections by the same rules for every model (problem and failing output, never code).
+### T17 · Run the model test [gate] (~3–5 h, mostly unattended)
+- Freeze `bench/candidates.json` with exactly the spec's four candidates and one setting each: Inkling 2 Mini Q4_K_M; Qwen3.8 27B (the unsloth GGUF build); Qwen3.6 35B-A3B 4-bit (MLX); Gemma 4 E4B 4-bit (MLX).
+- Per model: a run configuration, load, 5 tasks with up to 3 attempts and Claude's reviews, unload.
 - Apply the stop rule and ranking (spec §8). Save everything in `results/model-test-<date>/`.
 
-### T15 · Model test report (~30 min)
-- A short report on the page: per model, local passes, corrections, escalations, infra failures, median attempt time; the chosen model or the stop.
+### T18 · Model test report (~30 min)
+- On the page: per model, local passes, corrections, escalations, infra failures, median attempt time; the chosen model or the stop.
 
 ## Phase 3 · Card Table trial
 
-### T16 · Pick and prepare (~30 min, needs Che)
-- Che picks 1–2 Card Table issues (CHE-980 to CHE-985 or newer). Card Table's checks are `bun run typecheck` and `bun test`; it has no lint script.
-- For each issue, a preparation session writes the task file and protected tests and commits them on a branch as the shared base commit (spec §6.5).
+### T19 · Pick and prepare (~30 min, needs Che)
+- Che picks 1–2 Card Table issues. Card Table's checks: `bun run typecheck` and `bun test` (it has no lint script).
+- Per issue, a standalone preparation session (`claude -p`, Opus 5.5) writes the task file, protected tests, sentinel and manifest, and commits them on a branch as the shared base commit. Its session id is saved.
 
-### T17 · Hybrid and baseline runs **[gate]** (~half day)
-- For each issue, two fresh Claude Code sessions started from this one, each on its own worktree of the base commit:
+### T20 · Hybrid and baseline runs [gate] (~half day)
+- Per issue, two new standalone Claude Code sessions (not forks; Opus 5.5 at the same effort; session ids saved), each on its own worktree of the base commit, each given only the task file and base commit, with no access to the other's worktree or results folder:
   - Hybrid: orchestrates the local model with `local-worker`.
-  - Baseline: Claude alone, no local model.
-- Each ends only when it passes the same checks and the same review step. The baseline worktree is discarded afterwards; the hybrid result goes into a Card Table PR for Che.
-- T12 sums each session's usage.
+  - Baseline: Claude alone.
+- Each finishes only when it passes the same checks and the same review step. The baseline worktree is removed after evidence is saved.
 
-### T18 · Trial report and packaging decision (~30 min)
-- Report: summed cost-weighted tokens for both after dispatch and in total, the two ratios against the bar (60% and 80%), local code share, corrections, escalations, elapsed time. Packaging needs both ratios under the bar.
+### T21 · Integrate and merge (~1 h, needs Che)
+- Merge the hybrid result into the issue branch serially, re-run every check on the merged commit with the Check profile (blocked outcome included), and re-review any conflict resolution.
+- Open a draft PR in Card Table; merge only with Che's yes, per his PR rules.
 
-## Phase 4 · Package (only if T18 meets the bar)
+### T22 · Trial report and packaging decision (~30 min)
+- Summed cost-weighted tokens for both arms after dispatch and in total, the two ratios against the bars (60% and 80%), local code share, corrections, escalations, elapsed time. Packaging needs phase 3's acceptance criteria met (an issue merged) **and** both ratios under the bar; `inconclusive` blocks packaging until Che decides.
 
-### T19 · Skill (~1 h)
-- A `local-orchestrator` skill in `~/projects/ches-skills/skills/` through `new-skill`, then `bin/publish`. It tells a session how to write task files and protected tests, run `local-worker`, write corrections, escalate, and record usage.
+## Phase 4 · Package (only if T22 passes)
 
-## Order and what can run now
+### T23 · Skill (~1 h)
+- A `local-orchestrator` skill in `~/projects/ches-skills/skills/` through `new-skill`, then `bin/publish`.
 
-- Now (no model server): T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10 (fake server) → T12 → T13.
-- After Che's word on CHE-1166: T10 (real) → T11 if needed → T14 → T15 → T16 → T17 → T18 → T19.
+## Order
 
-Estimate (not a limit): about 2 days of build before the gate; then about 1 day of runs, mostly unattended.
+- Now, no model server: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10 (fake server) → T12 → T13 → T16.
+- After Che's word on CHE-1166: T10 (real) → T11 if needed → T14 → T15 → T17 → T18 → T19 → T20 → T21 → T22 → T23.
+
+Estimate (not a limit): about 2.5 days of build before the gate; after it, the arcade games are ready for Che to play within about half a day.
 
 ## Reviews
 
-- Code written by Claude: Sol and Terra review before merge, per Che's rules; the closing audit adds Gemini.
+- Code written by Claude: Sol and Terra review before merge; the closing audit adds Gemini.
 - Each phase's results go on the feature page as the record.

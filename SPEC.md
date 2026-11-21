@@ -2,7 +2,7 @@
 
 Issue: https://linear.app/chedev/issue/CHE-1170/claude-orchestrates-local-models-for-real-coding-work
 
-Status: rev 5, approved by Che on November 21, 2026. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and the closing audit (Sol, Terra, Gemini 4 Neon high). The review cap is reached; rev 5's fixes to the audit's findings were not re-reviewed. Nothing built yet.
+Status: rev 6 (draft). Rev 5 was approved by Che on November 21, 2026; rev 6 adds the arcade evaluation Che asked for afterwards (§3, §7 phase 1b, §12) and needs his re-approval. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and the closing audit (Sol, Terra, Gemini 4 Neon high). The review cap is reached; rev 5's fixes to the audit's findings were not re-reviewed. Nothing built yet.
 
 ## 1. Goal
 
@@ -29,6 +29,10 @@ Che, November 21, on the spec review page (verdict: approve, on rev 1d78f0b):
 - Sharing with CHE-1166: wait. No model requests, loads or unloads until CHE-1166's scored run is finished and Che says so in chat (§6.6).
 - Baseline: a real Claude-only run of each Card Table task (§6.5).
 - Packaging bar: 60% after dispatch, plus the 80% total guard (§9).
+
+Che, November 21, in chat, after approval (needs re-approval on the page):
+
+- Before Card Table, add an arcade evaluation that mirrors CHE-1166's Snake comparison with Claude as the frontier model: two games, each built three ways, so six games in all (§12). Che plays and judges every finished game; Claude does everything up to "ready" and keeps the stats.
 
 ## 4. Terms
 
@@ -127,11 +131,12 @@ A skill in `ches-skills` via `new-skill`, plus the script in this repo, only aft
 ## 7. Phases
 
 1. **Plumbing and calibration.** Build `local-worker`. Pin versions. Calibrate the whole loop on one tiny task with headless Claude Code under the sandbox: read, edit, protected checks, one correction, completion, plus the canary checks (§6.1), the tamper cases (§6.2) and a cancellation test. If it fails, run the same calibration on Codex CLI. If neither qualifies, stop and report.
+1b. **Arcade evaluation** (§12). Six games, each blind-reviewed by Che. Runs after phase 1, before the model test, since it uses Inkling 2 Mini as CHE-1166 did.
 2. **Model test.** Freeze before running: the candidate list with exact files and settings, 5 tasks with base commits and protected tests, the task prompts, and the correction rules. Tasks: a pure function, a bug fix, a React component, a refactor, and adding tests to existing code (graded by frozen mutants, §6.2). Candidates: the installed coding-capable models (Inkling 2 Mini Q4_K_M, Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 E4B), each at one frozen setting. Every model gets the same 5 tasks; every attempt, prompt, correction and diff is saved.
 3. **Card Table trial.** 1–2 real Card Table issues chosen with Che, each run with the best model and, if Che picks the real baseline, by Claude alone.
 4. **Package** (§6.7), if phase 3 meets the bar.
 
-Estimates (not limits): phase 1 about half a day; phase 2 about 3–5 hours of mostly unattended running; phase 3 about half a day.
+Estimates (not limits): phase 1 about half a day; phase 1b about half a day of mostly unattended running, plus Che's play time; phase 2 about 3–5 hours of mostly unattended running; phase 3 about half a day.
 
 ## 8. Stop rule after phase 2
 
@@ -158,3 +163,47 @@ If several qualify, the best model has the most local passes; ties go to fewer t
 - Claude's planning, test writing and review still use Claude usage; the savings come only from accepted local code.
 - A few tasks show feasibility, not a reliable success rate or proof of equal quality.
 - Memory figures are LM Studio estimates until measured.
+
+## 12. Arcade evaluation (phase 1b)
+
+Added by Che on November 21, after approval. It mirrors CHE-1166's Snake comparison (protocol `snake-human-review-v2`) with Claude as the frontier model, so the results line up with GPT's.
+
+### 12.1 What gets built
+
+Two games, each built three ways: six games.
+
+- **Snake:** CHE-1166's `snake-starter/TASK.md`, copied word for word and hashed. Output file `src/snake.html`.
+- **Maze chase:** an original maze-chase arcade game in the same style: one self-contained HTML file, the player eats dots in a maze while chasers hunt them, with power-ups that turn the tables. Claude writes the contract in the same form and level of detail as the Snake task and freezes it before any run. The maze, characters, name and look are original; it is not a copy of any existing game. Output file `src/maze.html`.
+
+The three ways (arms), as in CHE-1166:
+
+1. **Claude only:** a fresh headless Claude Code session on Opus 5.5 at high effort (matching GPT-6.1 Sol at high) builds the game.
+2. **Inkling only:** Claude sends the task to Inkling 2 Mini Q4_K_M (high reasoning effort, 131,072-token context, as in CHE-1166) through the worker program chosen in phase 1, and Inkling builds it alone.
+3. **Hybrid:** Claude reads the contract and gives one implementation assignment without writing code; Inkling builds it; Claude reviews the source and either accepts it or gives a scoped correction, never replacement code.
+
+### 12.2 Rules (same as CHE-1166)
+
+- Each arm starts in its own empty workspace and may write only its game file. No arm sees another arm's or CHE-1166's games.
+- Nobody runs or tests the game: no browser, server, build, package install or network for any arm, and Claude doesn't run them either. Claude's hybrid review is a source review, not proof the game works. Che owns all game testing.
+- At most 3 implementation attempts per arm. In the Claude-only and Inkling-only arms, a new attempt happens only when the file is missing or empty, with the previous exit and stop reason as feedback. In the hybrid arm, Claude reviews after each attempt that produced a file.
+- No time limits; elapsed time is measured, not cut off.
+- Inkling runs inside the worker sandbox (§6.1). The Claude-only session runs with only file read, write and edit tools: no shell, no MCP servers, no settings from Che's own setup.
+- Arms run one at a time in a random order, and the whole evaluation waits for the model-server gate (§6.6).
+
+### 12.3 Blind review by Che
+
+- The six games are copied to `~/projects/local-ai-output/<run id>/` with random labels A to F and one index page, as CHE-1166 does. Nothing is published remotely.
+- Che plays each game and rates it on a review page: works fully, partly or not at all; an overall score from 1 to 5; and notes. The mapping from label to game and arm stays hidden until Che submits his ratings.
+- Claude takes no part in judging game quality.
+
+### 12.4 Stats Claude keeps
+
+For each of the six games: arm, game, elapsed time, attempts and their outcomes, final outcome, file hash and size, the hybrid review's reasons, and every model call with its model, effort and tokens. Claude tokens are recorded raw (input, cache writes, cache reads, output) and cost-weighted (§6.5). Inkling tokens are prompt and completion tokens from the server. Missing numbers are unknown, never zero.
+
+The report puts these beside Che's ratings and, read-only, beside CHE-1166's Snake results where they exist. CHE-1166's files are never changed.
+
+### 12.5 Limits
+
+- One run per arm: it shows what happened this time, not a reliable rate.
+- The local worker program may differ from CHE-1166's (Codex CLI), and Opus at high effort is not the same compute as Sol at high, so the comparison with GPT changes more than the orchestrator.
+- Che's play test is the quality measure; Claude's stats measure effort and usage only.
