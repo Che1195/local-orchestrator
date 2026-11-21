@@ -58,7 +58,7 @@ export interface WorkerResult {
 const INFRA = /API Error|ECONNREFUSED|ECONNRESET|socket hang up|fetch failed|Connection error|\b5\d\d\b|overloaded|Unable to connect/i;
 
 export function claudeCommand(claudeBin: string, m: LocalModel, tools: readonly string[], sessionId: string): string[] {
-  return [claudeBin, '-p', '--model', m.model, '--effort', m.effort, '--session-id', sessionId, '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--setting-sources', '', '--permission-mode', 'bypassPermissions', '--tools', tools.join(',')];
+  return [claudeBin, '-p', '--model', m.model, '--effort', m.effort, '--session-id', sessionId, '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--setting-sources', '', '--permission-mode', 'bypassPermissions', '--autocompact', String(m.contextWindow), '--tools', tools.join(',')];
 }
 
 export function localEnv(m: LocalModel, tmp: string): Record<string, string> {
