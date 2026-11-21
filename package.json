@@ -1,0 +1,17 @@
+{
+  "name": "local-orchestrator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "test": "bun test tests"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.5",
+    "eslint": "10.15.0",
+    "globals": "17.14.0",
+    "typescript": "~6.0",
+    "typescript-eslint": "8.73.0"
+  }
+}

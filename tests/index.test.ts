@@ -1,0 +1,6 @@
+import { expect, test } from 'bun:test';
+import { VERSION } from '../src/index';
+
+test('package loads', () => {
+  expect(VERSION).toBe('0.0.0');
+});
