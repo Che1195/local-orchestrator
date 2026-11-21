@@ -1,0 +1,15 @@
+{
+  "label": "Local orchestrator",
+  "pages": {
+    "local-orchestrator": {
+      "answers": "none",
+      "file": "local-orchestrator.html",
+      "id": "local-orchestrator/local-orchestrator/5b9dfe44",
+      "publish": "published",
+      "title": "Local orchestrator",
+      "type": "feature",
+      "updated": "2026-11-21T14:20:35-05:00"
+    }
+  },
+  "version": 1
+}
