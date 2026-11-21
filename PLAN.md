@@ -2,7 +2,7 @@
 
 Spec: SPEC.md rev 6 (rev 5 approved by Che on November 21, 2026; rev 6 adds the Snake evaluation and awaits his re-approval). The spec wins where they differ.
 
-Status: draft rev 3, revised after plan review rounds 1 and 2 (gpt-6.1-sol and gpt-6.1-terra, high) and Che's Snake request. Nothing built yet.
+Status: draft rev 4, revised after plan review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and Che's Snake request. Nothing built yet.
 
 ## Ground rules
 
