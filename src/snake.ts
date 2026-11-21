@@ -329,8 +329,9 @@ if (import.meta.main) {
   } else if (mode === 'publish') console.log(await publish(id));
   else if (mode === 'publish-combined') {
     // publish-combined <name> <runId>:<arm,arm> [<runId>:<arm,arm> ...]
-    const sources = rest.map(s => { const [runId, arms] = s.split(':'); return { runId: runId ?? '', arms: (arms ?? '').split(',') as Arm[] }; });
-    console.log(await publishCombined(id, sources));
+    const from = rest.find(s => s.startsWith('--from='))?.slice('--from='.length) ?? 'A';
+    const sources = rest.filter(s => !s.startsWith('--from=')).map(s => { const [runId, arms] = s.split(':'); return { runId: runId ?? '', arms: (arms ?? '').split(',') as Arm[] }; });
+    console.log(await publishCombined(id, sources, defaultPaths(), from));
   }
   else throw new Error('unknown mode');
 }
@@ -339,7 +340,7 @@ if (import.meta.main) {
  * One blind page across several runs: every kept game from the named arms, shuffled and labelled A, B, C, ...
  * The label-to-run mapping is saved privately; the index shows only labels.
  */
-export async function publishCombined(name: string, sources: { runId: string; arms: Arm[] }[], paths = defaultPaths()): Promise<string> {
+export async function publishCombined(name: string, sources: { runId: string; arms: Arm[] }[], paths = defaultPaths(), firstLabel = 'A'): Promise<string> {
   checkRunId(name);
   const games: { runId: string; arm: Arm; kept: string; hash: string }[] = [];
   for (const s of sources) {
@@ -361,7 +362,7 @@ export async function publishCombined(name: string, sources: { runId: string; ar
   const mapping: Record<string, { runId: string; arm: Arm; hash: string }> = {};
   const rows: string[] = [];
   for (const [i, g] of order.entries()) {
-    const label = String.fromCharCode(65 + i);
+    const label = String.fromCharCode(firstLabel.charCodeAt(0) + i);
     mapping[label] = { runId: g.runId, arm: g.arm, hash: g.hash };
     if (g.kept) {
       await writeFile(join(out, `${label}.html`), await readFile(g.kept), { flag: 'wx' });
