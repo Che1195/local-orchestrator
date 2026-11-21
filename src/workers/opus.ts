@@ -49,9 +49,10 @@ export function opusProfile(workspace: string, hidden: string[], canWrite: boole
 ; Hide Che's own instructions, memory, skills and rules, and any CLAUDE.md or AGENTS.md outside the workspace.
 (deny file-read* (literal ${lit(join(home, '.claude', 'CLAUDE.md'))}) (subpath ${lit(join(home, '.claude', 'skills'))}) (subpath ${lit(join(home, '.claude', 'rules'))}) (subpath ${lit(join(home, '.claude', 'agents'))}) (subpath ${lit(join(home, '.claude', 'plugins'))}) (subpath ${lit(join(home, '.agents'))}) (subpath ${lit(join(home, '.codex'))}))
 (deny file-read* (regex #"/\\.claude/projects/[^/]+/memory(/|$)") (regex #"/(CLAUDE|CLAUDE\\.local|AGENTS)\\.md$"))
-; Hide the other arms, results, mapping, output and CHE-1166's repo.
-(deny file-read* ${hidden.map(p => `(subpath ${lit(real(p))})`).join(' ')})
-(allow file-read* (subpath ${lit(ws)}))
+; Hide the other arms, results, mapping, output and CHE-1166's repo: contents and listings, not metadata,
+; so Claude Code can still resolve the workspace's parent folders.
+(deny file-read-data ${hidden.map(p => `(subpath ${lit(real(p))})`).join(' ')})
+(allow file-read* file-read-data (subpath ${lit(ws)}))
 ; No writes anywhere under ~/projects except this arm's src folder (and none at all for read-only roles).
 (deny file-write* (subpath ${lit(projects)}))${canWrite ? `
 (allow file-write* (subpath ${lit(join(ws, 'src'))}))` : ''}
