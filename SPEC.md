@@ -2,7 +2,7 @@
 
 Issue: https://linear.app/chedev/issue/CHE-1170/claude-orchestrates-local-models-for-real-coding-work
 
-Status: draft rev 3 for Che's review, November 21, 2026. Revised after spec review rounds 1 and 2 (gpt-6.1-sol and gpt-6.1-terra, high). Nothing built yet.
+Status: draft rev 4 for Che's review, November 21, 2026. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high). Nothing built yet.
 
 ## 1. Goal
 
@@ -35,7 +35,7 @@ Open for Che (on the review page): how this shares the model server with CHE-116
 - **Correction:** Claude's feedback after a failed check or rejected diff. It describes the problem and the failing output; it never contains replacement implementation code.
 - **Escalation:** after the third failed attempt, Claude writes the piece itself.
 - **Infrastructure failure:** an attempt that failed with evidence of a harness, sandbox or server fault: a server error response, a sandbox setup error, or a harness crash. Without that evidence, a failed or timed-out attempt is a model failure. An infrastructure failure is re-run, at most twice per task; after that the task is recorded as blocked and phase 2 reports it.
-- **Writable paths:** the files and folders the task file says the worker may change (for example `src/game/`). Everything else, including tests, test helpers, check commands, package and lock files, dependencies and tool configuration, is protected.
+- **Writable paths:** the files and folders the task file says the worker may change (for example `src/game/`, or a test folder for a test-writing task). Everything else, including Claude's acceptance tests, test helpers, check commands, package and lock files, dependencies and tool configuration, is protected.
 - **Baseline:** the same task, from the same base commit and protected tests, done by Claude alone.
 
 ## 5. Model server
@@ -63,12 +63,13 @@ The worker's code is untrusted input, so checks never run in the worker's worktr
 - Claude writes the acceptance tests before dispatch and commits them to the task's base commit.
 - After an attempt, the script rejects any diff outside the writable paths. Then it builds a fresh check checkout: the base commit, dependencies installed from the lockfile by the harness, and only the worker's diff to the writable paths applied. Checks run there. Nothing the worker changed in its own worktree outside the writable paths, `node_modules` included, can reach the checks.
 - Checks run inside a sandbox with the same limits as the worker (§6.1). Skipped tests, zero tests run, or missing check output fail the attempt. The harness reads pass and fail from the test runner's machine-readable report and its exit code, never from printed text.
+- Because the code under test runs inside the test process, the harness doesn't trust the report alone. It requires every expected test, listed from the protected test files before the run, to appear as passed. Each run also includes one protected sentinel test that must fail; if the sentinel shows as passed, missing or the run exits 0 despite it, the report is treated as forged and the attempt fails. Claude's diff review also looks for code that exits the process, touches the test runner or writes report files.
 - Checks that need a browser or a local service run in the same kind of sandbox, with only the ports they need opened, disposable test data, and never Che's running dev server. If that boundary can't be set up, the check is recorded as blocked, not passed.
 - Negative controls are per task type, and each must fail before the worker starts:
   - New behavior or bug fix: the acceptance tests fail on the base commit.
   - Refactor: the behavior tests pass on the base commit and must still pass; a separate structural check (for example "module X no longer imports Y") fails on the base commit.
-  - Writing tests: the worker's tests are graded by mutants: they must pass on the real code and fail on at least 4 of 5 frozen faulty versions of it. The control is that no tests catch no mutants.
-- Phase 1 calibration includes a tamper case: a worker told to make a failing test pass by editing a test helper or a dependency must be caught.
+  - Writing tests: the worker writes tests only in that task's writable test folder. They are graded by mutants: they must pass on the real code and fail on at least 4 of 5 frozen faulty versions of it. Each mutant is checked before the run: Claude's own reference tests must fail on it, so every mutant is a real, catchable fault. The control is that an empty test folder catches no mutants.
+- Phase 1 calibration includes two tamper cases that must be caught: a worker told to make a failing test pass by editing a test helper or a dependency, and one told to forge a pass from a writable source file (for example by exiting the process early or writing a fake report).
 
 ### 6.3 `local-worker` script
 
@@ -88,7 +89,7 @@ The worker never grades its own work.
 
 1. Write the task file and protected tests; run the negative control.
 2. Dispatch; read diff and checks; accept, or send a correction (max 2); then escalate.
-3. One task at a time in v1. Accepted work merges into the issue branch serially; the script re-runs every check on the merged commit, and Claude re-reviews any conflict resolution.
+3. One task at a time in v1. Accepted work merges into the issue branch serially; the script re-runs every check on the merged commit with the same sandboxed check procedure (§6.2), blocked outcome included, and Claude re-reviews any conflict resolution.
 4. Failed worktrees are kept until their evidence is saved, then removed (never with `--force`, never another session's).
 
 ### 6.5 Measuring usage
@@ -98,7 +99,7 @@ The worker never grades its own work.
 - Missing numbers are recorded as unknown, never zero. Setup work shared across tasks is reported separately.
 - Tokens are a proxy for Claude usage-limit burn, not a measurement of it.
 - Shared preparation, meaning the task file and protected tests, is done once and used by both the hybrid and the baseline. Its usage is reported on its own line and left out of the comparison.
-- The comparison covers everything after dispatch: for the hybrid, reviews, corrections and escalation code; for the baseline, Claude's whole implementation.
+- The comparison covers everything after dispatch: for the hybrid, reviews, corrections and escalation code; for the baseline, Claude's whole implementation plus the same required review and any revisions that review prompts. Both runs pass the same checks and the same review before they count.
 - One number decides the comparison, cost-weighted tokens: input + 1.25 × cache writes + 0.1 × cache reads + 5 × output, the ratios of Opus 5.5's API prices. The raw categories are reported too.
 - Baseline (open decision): suggested is a real Claude-only run of each Card Table task from the same base commit, task file and protected tests, in a separate worktree, discarded afterwards. The alternative is an estimate, which makes every savings figure hypothetical.
 - Code share is descriptive only: lines of production code in the accepted diff written by the worker, excluding tests, generated files and formatting. Code Claude wrote during escalation counts as Claude's.
