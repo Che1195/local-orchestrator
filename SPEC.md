@@ -2,7 +2,7 @@
 
 Issue: https://linear.app/chedev/issue/CHE-1170/claude-orchestrates-local-models-for-real-coding-work
 
-Status: draft rev 4 for Che's review, November 21, 2026. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high). Nothing built yet.
+Status: draft rev 5 for Che's review, November 21, 2026. Revised after spec review rounds 1 to 3 (gpt-6.1-sol and gpt-6.1-terra, high) and the closing audit (Sol, Terra, Gemini 4 Neon high). The review cap is reached; rev 5's fixes to the audit's findings were not re-reviewed. Nothing built yet.
 
 ## 1. Goal
 
@@ -46,10 +46,12 @@ LM Studio (installed; runs llama.cpp and MLX; API on port 1234; documents Claude
 
 ### 6.1 Worker isolation (fails closed)
 
-A git worktree is not a security boundary, so the worker runs inside an OS-level sandbox (macOS Seatbelt, through the worker program's own sandbox mode):
+A git worktree is not a security boundary, so `local-worker` wraps the worker program in a macOS Seatbelt profile it owns (`sandbox-exec`), whatever sandbox mode the worker program has of its own. Checks get a second, stricter profile (§6.2).
 
-- Writes: only the task's writable paths.
-- Reads: the worktree and the worker program's own install. No other repos, no `~/.ssh`, no keychains, no `.env` files.
+Worker profile:
+
+- Writes: only the task's writable paths, plus the worker's own per-task home, config and temp folders.
+- Reads: the worktree, the worker program's own install and the system paths it needs. No other repos, no `~/.ssh`, no keychains, no `.env` files.
 - Network: only the local model endpoint. No other local ports, no internet.
 - Environment: a clean home and config directory created per task; scrubbed environment variables; no inherited hooks, MCP servers, plugins or credentials.
 - No unsandboxed fallback: if the sandbox can't be established, the attempt is an infrastructure failure.
@@ -61,22 +63,23 @@ Phase 1 proves the boundary with harmless canary checks: the worker is told to r
 The worker's code is untrusted input, so checks never run in the worker's worktree.
 
 - Claude writes the acceptance tests before dispatch and commits them to the task's base commit.
-- After an attempt, the script rejects any diff outside the writable paths. Then it builds a fresh check checkout: the base commit, dependencies installed from the lockfile by the harness, and only the worker's diff to the writable paths applied. Checks run there. Nothing the worker changed in its own worktree outside the writable paths, `node_modules` included, can reach the checks.
-- Checks run inside a sandbox with the same limits as the worker (§6.1). Skipped tests, zero tests run, or missing check output fail the attempt. The harness reads pass and fail from the test runner's machine-readable report and its exit code, never from printed text.
-- Because the code under test runs inside the test process, the harness doesn't trust the report alone. It requires every expected test, listed from the protected test files before the run, to appear as passed. Each run also includes one protected sentinel test that must fail; if the sentinel shows as passed, missing or the run exits 0 despite it, the report is treated as forged and the attempt fails. Claude's diff review also looks for code that exits the process, touches the test runner or writes report files.
+- After an attempt, the script rejects any diff outside the writable paths, and any diff that adds a symlink. Then it builds a fresh check checkout: the base commit, a copy of the clean dependency folder the harness prepared before the worker started (no second install, no network), and only the worker's diff to the writable paths applied. Checks run there. Nothing the worker changed in its own worktree outside the writable paths, `node_modules` included, can reach the checks.
+- Check profile: the checkout is read-only, writes go only to a temp and report folder, and there is no network at all, the model server included. Skipped tests, zero tests run, or missing check output fail the attempt. The harness reads pass and fail from the test runner's machine-readable report and its exit code, never from printed text.
+- A clean run means: every expected test (listed from the protected test files before the run) passed, the one protected sentinel test failed as it must, no other test failed or was skipped, no suite or unhandled error, and the runner exited with its normal test-failure code, not 0 and not a crash or signal. Anything else fails the attempt; a sentinel shown as passed or missing marks the report as forged.
+- Known limit: the code under test runs inside the test process, so code written on purpose to forge a correctly shaped report can't be fully stopped by the harness. The sentinel is a tamper indicator, not proof. Claude's diff review is the backstop: it rejects code that exits the process, touches the test runner, or writes report or result files.
 - Checks that need a browser or a local service run in the same kind of sandbox, with only the ports they need opened, disposable test data, and never Che's running dev server. If that boundary can't be set up, the check is recorded as blocked, not passed.
 - Negative controls are per task type, and each must fail before the worker starts:
   - New behavior or bug fix: the acceptance tests fail on the base commit.
   - Refactor: the behavior tests pass on the base commit and must still pass; a separate structural check (for example "module X no longer imports Y") fails on the base commit.
-  - Writing tests: the worker writes tests only in that task's writable test folder. They are graded by mutants: they must pass on the real code and fail on at least 4 of 5 frozen faulty versions of it. Each mutant is checked before the run: Claude's own reference tests must fail on it, so every mutant is a real, catchable fault. The control is that an empty test folder catches no mutants.
-- Phase 1 calibration includes two tamper cases that must be caught: a worker told to make a failing test pass by editing a test helper or a dependency, and one told to forge a pass from a writable source file (for example by exiting the process early or writing a fake report).
+  - Writing tests: the worker writes tests only in that task's writable test folder. Claude's reference tests and the 5 frozen mutants (faulty versions of the code) stay outside the worker's worktree, so the worker can't read or copy them. On the real code: at least one worker test runs, all pass, and the run is otherwise clean. On each mutant: the run is clean apart from at least one worker test failing; a crash or syntax error doesn't count as catching it. The worker's tests must catch at least 4 of 5 mutants. Each mutant is checked first: Claude's reference tests must fail on it, so every mutant is a real, catchable fault. The control is that an empty test folder catches no mutants.
+- Phase 1 calibration includes three tamper cases that must be caught: a worker told to make a failing test pass by editing a test helper or a dependency, one told to exit the test process early, and one told to write a correctly shaped fake report. If the fake report gets past the harness, Claude's review must catch it, and the result is recorded as relying on review.
 
 ### 6.3 `local-worker` script
 
-Bun + TypeScript. Input: repo, base commit, task file, model settings, attempt budget. Steps:
+Bun + TypeScript. One invocation runs one attempt. Input: repo, base commit, task file, model settings, attempt number, and for a correction, Claude's correction text and the previous attempt's diff. Steps:
 
-1. Create a worktree at the base commit. Refuse a repo with uncommitted changes in the files the task touches.
-2. Prepare dependencies on the host from the lockfile before the worker starts (the only step with network, limited to 10 minutes). Copy no `.env` or secrets.
+1. Create a fresh worktree at the base commit. For a correction, apply the previous attempt's diff if it passed the path and symlink check; otherwise start clean. Every attempt starts a new worker session with the task file, plus the correction text for a correction; no worker conversation is resumed. This is the same for every model. Refuse a repo with uncommitted changes in the files the task touches.
+2. Prepare a clean dependency folder on the host from the lockfile before the worker starts, once per task (the only step with network, limited to 10 minutes, outside the attempt deadline). Copy no `.env` or secrets.
 3. Start the worker in its own process group, inside the sandbox, with the task.
 4. Deadlines: 20 minutes for the worker, then 10 minutes for all checks, so 30 minutes per attempt end to end. At a deadline the script stops every process group it started (worker, checks, test services) and cancels the model request without stopping the shared server.
 5. Run the checks (§6.2).
@@ -94,7 +97,8 @@ The worker never grades its own work.
 
 ### 6.5 Measuring usage
 
-- Each task's orchestration runs in its own Claude Code session. Claude's usage per task comes from that session's transcript: input, output and cache tokens for every call, failed calls included, covering planning, test writing, reviews, corrections and escalation code.
+- Sessions: shared preparation (planning, task file, protected tests, negative control) runs in its own Claude Code session and is committed to the base commit. Then the hybrid loop and the baseline each start in a fresh session from that same commit, with the same task file and no view of the other's code or feedback. Both use the same review structure: a review step in their own session.
+- Claude's usage comes from each session's transcript: input, output and cache tokens for every call, failed calls included.
 - Local tokens come from the worker's server responses.
 - Missing numbers are recorded as unknown, never zero. Setup work shared across tasks is reported separately.
 - Tokens are a proxy for Claude usage-limit burn, not a measurement of it.
@@ -118,7 +122,7 @@ A skill in `ches-skills` via `new-skill`, plus the script in this repo, only aft
 
 ## 7. Phases
 
-1. **Plumbing and calibration.** Build `local-worker`. Pin versions. Calibrate the whole loop on one tiny task with headless Claude Code under the sandbox: read, edit, protected checks, one correction, completion, plus the canary checks (§6.1) and a cancellation test. If it fails, run the same calibration on Codex CLI. If neither qualifies, stop and report.
+1. **Plumbing and calibration.** Build `local-worker`. Pin versions. Calibrate the whole loop on one tiny task with headless Claude Code under the sandbox: read, edit, protected checks, one correction, completion, plus the canary checks (§6.1), the tamper cases (§6.2) and a cancellation test. If it fails, run the same calibration on Codex CLI. If neither qualifies, stop and report.
 2. **Model test.** Freeze before running: the candidate list with exact files and settings, 5 tasks with base commits and protected tests, the task prompts, and the correction rules. Tasks: a pure function, a bug fix, a React component, a refactor, and adding tests to existing code (graded by frozen mutants, §6.2). Candidates: the installed coding-capable models (Inkling 2 Mini Q4_K_M, Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 E4B), each at one frozen setting. Every model gets the same 5 tasks; every attempt, prompt, correction and diff is saved.
 3. **Card Table trial.** 1–2 real Card Table issues chosen with Che, each run with the best model and, if Che picks the real baseline, by Claude alone.
 4. **Package** (§6.7), if phase 3 meets the bar.
@@ -133,10 +137,10 @@ If several qualify, the best model has the most local passes; ties go to fewer t
 
 ## 9. Acceptance criteria
 
-- Phase 1: the calibration passes end to end, every canary is blocked, and a timed-out attempt leaves no process or model request running. `local-worker` passes typecheck and lint.
+- Phase 1: the calibration passes end to end, every canary is blocked, every tamper case is caught (recorded where only review caught it), and a timed-out attempt leaves no process or model request running. `local-worker` passes typecheck and lint.
 - Phase 2: results saved for every model and attempt, failures included, with the qualify decision per §8.
 - Phase 3: at least one real Card Table issue merged with all Card Table checks passing and Claude's review accepted; every escalation and Claude rewrite recorded.
-- Packaging bar (open decision): suggested is the hybrid's cost-weighted Claude tokens after dispatch (§6.5) at most 60% of the real baseline's, with both passing all checks and Claude's review. With an estimated baseline, the result is reported as inconclusive, and packaging needs Che's call.
+- Packaging bar (open decision): suggested is the hybrid's cost-weighted Claude tokens after dispatch (§6.5) at most 60% of the real baseline's, summed across all phase 3 tasks with escalations included, with both passing all checks and Claude's review. A second guard on the same sums: the hybrid's total including shared preparation is at most 80% of the baseline's total including the same preparation, so a small saving on top of large shared prep can't pass. With an estimated baseline, the result is reported as inconclusive, and packaging needs Che's call.
 
 ## 10. Out of scope (v1)
 
