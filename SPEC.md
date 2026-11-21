@@ -172,7 +172,7 @@ Added by Che on November 21, after approval. CHE-1166 already built Snake three 
 
 ### 12.1 What gets built
 
-- **The task:** CHE-1166's `snake-starter/TASK.md`, copied word for word, with its hash checked against CHE-1166's file. Output file `src/snake.html`.
+- **The task:** CHE-1166's `snake-starter/TASK.md` and `snake-starter/AGENTS.md`, copied word for word, with their hashes checked against CHE-1166's files, plus CHE-1166's boundary, planner and review prompt text. Output file `src/snake.html`.
 - **The three ways (arms)**, mirroring CHE-1166's:
   1. **Claude only:** a fresh headless Claude Code session on Opus 5.5 at high effort (matching Sol at high) builds the game.
   2. **Inkling only:** Claude sends the task to Inkling 2 Mini Q4_K_M (high reasoning effort, 131,072-token context, as in CHE-1166) through the worker program chosen in phase 1, and Inkling builds it alone.
@@ -182,7 +182,7 @@ Added by Che on November 21, after approval. CHE-1166 already built Snake three 
 
 - Each arm starts in its own empty workspace and may write only `src/snake.html`. No arm sees another arm's game or CHE-1166's games.
 - Nobody runs or tests the game: no browser, server, build, package install or network for any arm, and Claude doesn't run them either. Claude's hybrid review is a source review, not proof the game works. Che owns all game testing.
-- At most 3 implementation attempts per arm. In the Claude-only and Inkling-only arms, a new attempt happens only when the file is missing or empty, with the previous exit and stop reason as feedback. In the hybrid arm, Claude reviews after each attempt that produced a file.
+- At most 3 implementation attempts per arm, with CHE-1166's rule: an attempt succeeds only if the call ended normally (exit 0, not timed out) and left a non-empty file. Otherwise the next attempt gets CHE-1166's "finish the unchanged task" feedback with the exit and stop reason, and keeps the existing file. In the Claude-only and Inkling-only arms, the first successful attempt ends the arm. In the hybrid arm, Claude reviews after each successful attempt. If all 3 attempts fail, the arm's outcome is failed, and its last non-empty file, if any, is still shown to Che, marked as from a failed arm.
 - No time limits; elapsed time is measured, not cut off.
 - Inkling runs inside the worker sandbox (§6.1). The Claude-only session runs with only file read, write and edit tools: no shell, no MCP servers, no settings from Che's own setup.
 - Arms run one at a time in a random order, after the model-server gate (§6.6).
@@ -190,7 +190,7 @@ Added by Che on November 21, after approval. CHE-1166 already built Snake three 
 ### 12.3 Che's review
 
 - Claude's three games are copied to `~/projects/local-ai-output/<run id>/` with random labels A to C and an index page, as CHE-1166 did. Nothing is published remotely.
-- Che plays them blind and rates each on a review page: works fully, partly or not at all; a score from 1 to 5; and notes.
+- Che plays them blind and rates each on a review page: works fully, partly or not at all; a score from 1 to 5; and notes. Before he submits, nothing he can see shows timings, attempts, usage, outcomes or review notes: only labels and game links. A label with no file shows "no playable game"; it is ranked last, below every playable game.
 - Then Che ranks all six Snakes from best to worst, GPT's three included. GPT's labels are already known to him, so only Claude's three are blind.
 - Claude takes no part in judging game quality.
 

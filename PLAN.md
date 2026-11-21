@@ -30,7 +30,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - Tests: scripted replies round-trip; a killed client shows as a disconnect.
 
 ### T3 · Task file, run states and ledger (~1 h)
-- `src/task.ts`: the task file (JSON) with hand-written guards: `id`, `repo`, `baseCommit`, `taskType` (`behavior` | `bugfix` | `refactor` | `tests` | `artifact`), `writablePaths[]`, `instructions`, `checks[]` (name + command), `testReport` (JUnit path), `testManifest` (path outside the repo, T7), `sentinelTest` (name), and per type: `structuralCheck` for `refactor`; `mutantsDir` and `referenceTestsDir` outside the repo for `tests`; `artifactFile` for `artifact` (the Snake games, no checks).
+- `src/task.ts`: the task file (JSON) with hand-written guards: `id`, `repo`, `baseCommit`, `taskType` (`behavior` | `bugfix` | `refactor` | `tests` | `artifact`), `writablePaths[]`, `instructions`, `checks[]` (name + command), `testReport` (JUnit path), `testManifest` (path outside the repo, T7), `sentinelTest` (name), and per type: `structuralCheck` for `refactor`; `mutantsDir` and `referenceTestsDir` outside the repo for `tests`; `artifactFile` for `artifact` (the Snake games, no checks). `artifact` tasks skip dependency preparation, the negative control and all checks; corrections start from the previous attempt's file (T13).
 - Attempt states. `local-worker` never decides a local pass by itself:
   - The script ends an attempt as `checks-passed`, `model-fail`, `infra-fail`, `blocked` or `forged` (for `artifact` tasks: `artifact-present` or `model-fail`).
   - Claude then records a review with `local-worker review --task <id> --attempt <n> --accept|--reject --reason <text>`.
@@ -53,11 +53,11 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
   - Refuse when the repo has uncommitted changes in files the task touches.
   - **Dependencies, once per task:** a throwaway clone at the base commit in a temp folder, `bun install --frozen-lockfile --ignore-scripts` there (10-minute limit), then verify that no symlink in `node_modules` points outside the dependency folder or at the repo. Save the folder as the clean dependency copy.
   - **Attempt worktree:** a fresh worktree at the base commit; for a correction, apply the previous attempt's validated diff.
-  - **Capture:** list every change with `git status --porcelain=v2 --untracked-files=all --ignored` (tracked, staged, untracked and ignored), save the diff of writable paths plus a tar of every changed file as evidence.
+  - **Capture:** list every change with `git status --porcelain=v2 --untracked-files=all --ignored` (tracked, staged, untracked and ignored) and save a tar of every changed file as evidence. The replayable patch is made by `git add -A -f -- <writable paths>` in the tool-owned worktree, then `git diff --cached --binary <base commit>`, so new, staged and ignored files in writable paths are all in it.
   - **Validate:** every changed path inside `writablePaths`; no symlinks (mode `120000`); no protected file touched. Ignored files outside the writable paths are evidence of an attempted escape and fail the attempt.
   - **Check checkout:** a new worktree at the base commit, a copy-on-write clone of the clean dependency copy (`cp -c`), then the validated diff.
   - **Cleanup:** after evidence is saved, `git checkout -- . && git clean -fdx` inside tool-owned worktrees, then `git worktree remove` (never `--force`). Worktrees this tool didn't create are never touched.
-- Tests on a throwaway fixture repo, including Card Table's layout copied as a fixture: path escape rejected; symlink rejected; untracked and ignored files captured; a tampered `node_modules` file in the worker worktree doesn't reach the check checkout; cleanup leaves no worktree behind.
+- Tests on a throwaway fixture repo, including Card Table's layout copied as a fixture: path escape rejected; symlink rejected; untracked and ignored files captured; a new file in a writable path reaches both the correction worktree and the check checkout with exact contents; a tampered `node_modules` file in the worker worktree doesn't reach the check checkout; cleanup leaves no worktree behind.
 
 ### T6 · Process supervisor and cancellation (~1 h)
 - `src/supervise.ts`: start a command in a new process group and record every descendant's pid as it appears (polling `ps -o pid,pgid,ppid`); at the deadline send TERM, then KILL after 5 s, to the group and to any recorded descendant that moved to another group. Report whether output was still arriving at the deadline.
@@ -66,20 +66,22 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - Tests: a child that spawns grandchildren in a new group is fully killed; a hung child is killed at the deadline; the fake server records the disconnect.
 
 ### T7 · Check runner (~2 h)
+- **Sentinel placement:** the sentinel test file is never committed to the target repo. The harness copies it into each check checkout from outside the repo just before a run, so the repo's own `bun test` never sees it.
 - **Test manifest:** during task preparation (trusted, before dispatch), run the protected tests on Claude's reference solution with the JUnit reporter and save every test's identity (file path + full `describe > test` name) to `testManifest`, outside the repo. Supported forms: `test`/`it` inside `describe`, no tests generated at runtime from data. The grader never discovers tests from candidate code.
 - `src/checks.ts` runs the task's checks in the check checkout under the Check profile and grades by run kind:
   - **Acceptance run** (behavior, bugfix, refactor): clean = every manifest test passed, the sentinel (in its own protected file) failed, nothing else failed or skipped, no suite error, exit code is bun's normal test-failure code (not 0, not a signal). Refactor also needs its structural check to pass.
-  - **Tests task, real code:** at least one worker test runs, every worker test passes, the sentinel fails, no crash.
-  - **Tests task, each mutant:** sentinel fails, no crash or syntax error, and at least one worker test fails; the sentinel never counts as catching a mutant. Pass = at least 4 of 5 mutants caught.
+  - **Tests task, real code:** at least one worker test runs, every worker test passes, no worker test is skipped or marked todo, the sentinel fails, no suite error, and the exit code is bun's normal test-failure code.
+  - **Tests task, each mutant:** same report rules (no skips, no suite error, normal test-failure exit, sentinel fails), and at least one worker test fails; the sentinel never counts as catching a mutant. Pass = at least 4 of 5 mutants caught.
   - **Reference validation (preparation):** Claude's reference tests fail on every mutant; an empty worker test folder catches none.
   - Sentinel passed or missing → `forged`.
   - **Negative control:** run once on the base commit before dispatch; it must fail as the task type requires (spec §6.2), or the task is refused.
-- Tests with fixture repos: clean pass; one failing; one skipped; zero tests; a source file calling `process.exit(0)` at import; a source file writing a correctly shaped fake report (expected: passes the harness, which is why Claude's review exists; recorded so); a hung test killed at the deadline; mutant grading at 4 of 5 and 3 of 5.
+- Tests with fixture repos: clean pass; one failing; one skipped; zero tests; a source file calling `process.exit(0)` at import; a source file writing a correctly shaped fake report (expected: passes the harness, which is why Claude's review exists; recorded so); a hung test killed at the deadline; mutant grading at 4 of 5 and 3 of 5; a worker test file with a skipped test fails the tests task.
 
 ### T8 · Claude Code worker adapter (~1.5 h)
 - `src/workers/claude-code.ts` builds the headless command from the run configuration:
-  `claude -p --model <local model id> --output-format stream-json --verbose --strict-mcp-config --setting-sources "" --permission-mode bypassPermissions --allowedTools Read,Edit,Write,Glob,Grep,Bash`
-  with `ANTHROPIC_BASE_URL`, a dummy `ANTHROPIC_AUTH_TOKEN`, and the scrubbed environment, inside the Worker profile. Permissions are bypassed inside the worker program because Seatbelt is the boundary. For `artifact` tasks, `Bash` is left out.
+  `claude -p --model <local model id> --output-format stream-json --verbose --strict-mcp-config --setting-sources "" --permission-mode bypassPermissions --tools <list>`
+  with `ANTHROPIC_BASE_URL`, a dummy `ANTHROPIC_AUTH_TOKEN`, and the scrubbed environment, inside the Worker profile. `--tools` sets which tools exist at all (`--allowedTools` only pre-approves, so it is not used). Code tasks: `Read,Edit,Write,Glob,Grep,Bash`. `artifact` tasks: `Read,Edit,Write` only. Permissions are bypassed inside the worker program because Seatbelt is the boundary.
+- A fake-server test asks the artifact worker to run a shell command and to fetch a URL; both tools must be absent from the session's tool list. The Codex fallback (T11) gets the same test.
 - Each flag is checked against `claude --help` (2.1.329) while building; differences are recorded here.
 - Parse the stream for completion, errors and local token counts. Prompt = task instructions + correction text (if any) + the boundary rules.
 - Tests against the fake server: scripted read → edit → finish; scripted server error → `infra-fail`; scripted hang → deadline → `model-fail`.
@@ -114,24 +116,25 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 ## Phase 1b · Snake evaluation (spec §12)
 
 ### T13 · Snake task and runner (~1.5 h)
-- `snake/TASK.md`: copied word for word from CHE-1166's `snake-starter/TASK.md`; the runner refuses to start if its hash differs from CHE-1166's file.
+- `snake/starter/TASK.md` and `snake/starter/AGENTS.md`: copied word for word from CHE-1166's `snake-starter/`; `snake/prompts.ts`: CHE-1166's boundary, planner, review and retry text, copied from its `src/snake.ts`. The runner refuses to start if any hash differs from CHE-1166's files, pinned to its accepted run `snake-20261121-02`.
 - `src/snake.ts`, a port of CHE-1166's `snake-human-review-v2` runner to this harness:
-  - `prepare <run id>`: three empty workspaces, a random arm order, random labels A to C, and a manifest with hashes, run configuration and limitations.
+  - `prepare <run id>`: for each arm, a workspace that is a fresh git repo with one commit holding only `TASK.md`, `AGENTS.md` and an empty `src/` (the base commit); a random arm order; random labels A to C; a manifest with hashes, run configuration and limitations. The manifest, logs and mapping live under `results/<run id>/private/`.
   - `run <run id>`, one arm at a time in the manifest's order:
-    - Claude only: a new standalone headless session `claude -p --model claude-opus-5-5 --effort high --session-id <uuid>` with `--tools Read,Write,Edit` only, `--strict-mcp-config`, `--setting-sources ""`, in the workspace, given CHE-1166's boundary text and the task. A new attempt only if the file is missing or empty.
-    - Inkling only: `local-worker run` with an `artifact` task in the workspace, same boundary text and task. A new attempt only if the file is missing or empty.
+    - Claude only: a new standalone headless session `claude -p --model claude-opus-5-5 --effort high --session-id <uuid> --tools Read,Write,Edit --permission-mode acceptEdits --strict-mcp-config --setting-sources ""` in the workspace, given CHE-1166's boundary text and the task. `acceptEdits` lets it save the file; `--tools` keeps the shell and web tools out. Before the scored run, an unscored smoke session in a scratch folder must write a file with these exact flags.
+    - Inkling only: `local-worker run` with an `artifact` task in the workspace, same boundary text and task.
+    - Both solo arms use CHE-1166's rule (spec §12.2): success = normal exit and a non-empty file; otherwise retry with its retry text, keeping the existing file.
     - Hybrid: a new standalone Claude session (same settings, read-only tools) writes one assignment without code, using CHE-1166's planner prompt; Inkling builds; a new Claude review session reads the file and answers accept, revise with a scoped correction, or blocked, in CHE-1166's decision shape and review prompt; up to 3 attempts.
-    - After every attempt: scope check (only `src/snake.html` changed), file present and non-empty, hash and size saved.
+    - After every attempt: scope check (only `src/snake.html` changed), file present and non-empty, hash and size saved. A correction or retry continues in the same workspace from the previous attempt's file, as in CHE-1166.
   - Every Claude session id and every Inkling request is logged for T12. Elapsed time is measured per arm, with no cutoff.
-  - `publish <run id>`: copy the three games to `~/projects/local-ai-output/<run id>/` as `A.html` to `C.html` with an index page. The label-to-arm mapping stays in `results/<run id>/private/`.
-- Tests on the fake server: a full dry run with scripted Inkling and stubbed Claude sessions produces three labelled files, a manifest and a ledger; a scope violation stops that arm; a changed task file is refused.
+  - `publish <run id>`: copy the three games to `~/projects/local-ai-output/<run id>/` as `A.html` to `C.html` with an index page that shows only each label and a game link, or "no playable game". No timings, attempts, outcomes or usage appear there (CHE-1166's index showed timings; this one doesn't, to keep the review blind). Everything else stays in `results/<run id>/private/` until Che submits.
+- Tests on the fake server: a full dry run through the real runner with scripted Inkling and stubbed Claude sessions produces three labelled files and a private manifest and ledger; a hybrid revision keeps and edits the previous file; a call that exits non-zero after writing a file is retried; a scope violation stops that arm; a changed task file is refused; the index contains no timing or outcome text.
 
 ### T14 · Run the Snake evaluation [gate] (~1 h, mostly unattended)
 - Load Inkling 2 Mini at 131,072 context (run configuration), run the three arms, unload.
 - Done when: three games are ready (or recorded as failed) in the output folder and every arm's stats are saved.
 
 ### T15 · Che's review page and report (~1 h, then Che's play time)
-- An html-pages choice page: per game A to C, works (fully, partly, not at all), score 1 to 5, and notes; then a ranking of all six Snakes, listing Claude's three by label and GPT's three by CHE-1166's labels. No arm or model names for Claude's three.
+- An html-pages choice page: per game A to C, works (fully, partly, not at all), score 1 to 5, and notes; then a ranking of all six Snakes, listing Claude's three by label and GPT's three by CHE-1166's labels. Nothing about Claude's three beyond label and link appears before submission; a game with no file is shown as "no playable game" and ranked last.
 - After Che submits: reveal the mapping and publish the report with all six side by side: Che's ratings and ranking; elapsed time, attempts, outcome, frontier tokens (raw and cost-weighted for Claude; as CHE-1166 recorded them for GPT), Inkling tokens, and the hybrid review notes. CHE-1166's files are read only.
 
 ## Phase 2 · Model test
@@ -153,7 +156,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 
 ### T19 · Pick and prepare (~30 min, needs Che)
 - Che picks 1–2 Card Table issues. Card Table's checks: `bun run typecheck` and `bun test` (it has no lint script).
-- Per issue, a standalone preparation session (`claude -p`, Opus 5.5) writes the task file, protected tests, sentinel and manifest, and commits them on a branch as the shared base commit. Its session id is saved.
+- Per issue, a standalone preparation session (`claude -p`, Opus 5.5) writes the task file, protected tests and manifest, and commits the task file and protected tests on a branch as the shared base commit. The sentinel and manifest stay outside Card Table (T7). Its session id is saved.
 
 ### T20 · Hybrid and baseline runs [gate] (~half day)
 - Per issue, two new standalone Claude Code sessions (not forks; Opus 5.5 at the same effort; session ids saved), each on its own worktree of the base commit, each given only the task file and base commit, with no access to the other's worktree or results folder:
@@ -162,7 +165,7 @@ One immutable JSON file per run, `runs/<run id>/config.json`, written before the
 - Each finishes only when it passes the same checks and the same review step. The baseline worktree is removed after evidence is saved.
 
 ### T21 · Integrate and merge (~1 h, needs Che)
-- Merge the hybrid result into the issue branch serially, re-run every check on the merged commit with the Check profile (blocked outcome included), and re-review any conflict resolution.
+- Merge the hybrid result into the issue branch serially, re-run every check on the merged commit with the Check profile (blocked outcome included), then run Card Table's own `bun run typecheck` and `bun test` on that exact commit with no sentinel added; both must pass. Re-review any conflict resolution.
 - Open a draft PR in Card Table; merge only with Che's yes, per his PR rules.
 
 ### T22 · Trial report and packaging decision (~30 min)
